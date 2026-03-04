@@ -11,7 +11,7 @@ from PySide6.QtCore import (
     Qt, Signal, Slot, QObject, QUrl, QTimer,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
@@ -82,6 +82,14 @@ class MapWidget(QWidget):
 
         # ── WebEngine ─────────────────────────────────────────────────────────
         self._page = SilentPage(self)
+
+        # Allow the local map.html to fetch Leaflet + geocoder from unpkg CDN.
+        # Without this, QWebEngine blocks HTTPS requests from a file:// origin.
+        self._page.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
+            True,
+        )
+
         self._view = QWebEngineView(self)
         self._view.setPage(self._page)
 
