@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>GeoTag Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<!-- Leaflet core -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Leaflet Control Geocoder (Nominatim search) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder@2.4.0/dist/Control.Geocoder.css" />
+<script src="https://unpkg.com/leaflet-control-geocoder@2.4.0/dist/Control.Geocoder.js"></script>
+
+<!-- QWebChannel bridge -->
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #1e1e1e; }
+  #map { width: 100%; height: 100%; }
+
+  /* Pending-GPS marker pulse */
+  .marker-pending {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #f59e0b;
+    border: 2px solid #fff;
+    box-shadow: 0 0 6px #f59e0b;
+  }
+  /* Existing GPS marker */
+  .marker-existing {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #3b82f6;
+    border: 2px solid #fff;
+    opacity: 0.7;
+  }
+  /* Crosshair cursor when picking mode is active */
+  .picking #map { cursor: crosshair; }
+
+  /* Custom geocoder styling */
+  .leaflet-control-geocoder { min-width: 280px; }
+  .leaflet-control-geocoder-form input {
+    font-size: 14px;
+    padding: 6px 10px;
+    width: 100%;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+// ──────────────────────────────────────────────────────────────────────────
+// State
+// ──────────────────────────────────────────────────────────────────────────
+let map, pyBridge;
+let pickerMarker = null;      // Orange "selected location" marker
+let photoMarkers = [];        // Blue dots for existing GPS photos
+
+// ──────────────────────────────────────────────────────────────────────────
+// Init map
+// ──────────────────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map('map', {
+    center: [20, 0],
+    zoom: 2,
+    zoomControl: true,
+  });
+
+  // OpenStreetMap tiles — completely free, no key needed
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  // ── Geocoder (Nominatim) ────────────────────────────────────────────────
+  const geocoder = L.Control.geocoder({
+    defaultMarkGeocode: false,
+    geocoder: L.Control.Geocoder.nominatim({
+      geocodingQueryParams: { limit: 8 }
+    }),
+    placeholder: 'Search address, landmark, business…',
+    errorMessage: 'Nothing found.',
+    position: 'topleft',
+    collapsed: false,
+  })
+  .on('markgeocode', function(e) {
+    const { center, name } = e.geocode;
+    map.setView(center, 16);
+    placePickerAt(center.lat, center.lng, name);
+  })
+  .addTo(map);
+
+  // ── Click on map to pick location ──────────────────────────────────────
+  map.on('click', function(e) {
+    placePickerAt(e.latlng.lat, e.latlng.lng, null);
+  });
+
+  // ── QWebChannel bridge ─────────────────────────────────────────────────
+  if (typeof qt !== 'undefined') {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+      pyBridge = channel.objects.pyBridge;
+      console.log('[map] QWebChannel connected');
+    });
+  } else {
+    console.warn('[map] Running outside Qt — bridge unavailable');
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Place / move the orange picker marker
+// ──────────────────────────────────────────────────────────────────────────
+function placePickerAt(lat, lng, label) {
+  if (pickerMarker) {
+    pickerMarker.setLatLng([lat, lng]);
+  } else {
+    pickerMarker = L.marker([lat, lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="
+          width:22px;height:22px;border-radius:50%;
+          background:#f59e0b;border:3px solid #fff;
+          box-shadow:0 2px 8px rgba(0,0,0,.5);
+          cursor:grab;
+        "></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+      draggable: true,
+      title: 'Selected location — drag to adjust',
+    }).addTo(map);
+
+    pickerMarker.on('dragend', function() {
+      const ll = pickerMarker.getLatLng();
+      notifyPython(ll.lat, ll.lng, null);
+    });
+  }
+
+  const displayLabel = label || `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  pickerMarker.bindPopup(`<b>📍 Selected location</b><br>${displayLabel}`, { closeButton: false })
+              .openPopup();
+
+  notifyPython(lat, lng, label);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Send selected coordinates to Python
+// ──────────────────────────────────────────────────────────────────────────
+function notifyPython(lat, lng, label) {
+  if (pyBridge) {
+    pyBridge.locationSelected(lat, lng, label || '');
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Called FROM Python — add/refresh photo markers on the map
+// ──────────────────────────────────────────────────────────────────────────
+function setPhotoMarkers(markersJson) {
+  // markersJson: [{lat, lon, label}]
+  photoMarkers.forEach(m => map.removeLayer(m));
+  photoMarkers = [];
+
+  const data = JSON.parse(markersJson);
+  data.forEach(item => {
+    const m = L.circleMarker([item.lat, item.lon], {
+      radius: 5,
+      color: '#3b82f6',
+      fillColor: '#3b82f6',
+      fillOpacity: 0.7,
+      weight: 1.5,
+    }).bindTooltip(item.label, { direction: 'top', offset: [0, -6] })
+      .addTo(map);
+    photoMarkers.push(m);
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Called FROM Python — pan/zoom map to coordinates
+// ──────────────────────────────────────────────────────────────────────────
+function flyTo(lat, lng, zoom) {
+  map.flyTo([lat, lng], zoom || 14, { animate: true, duration: 1.0 });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Called FROM Python — place picker at a specific coordinate (programmatic)
+// ──────────────────────────────────────────────────────────────────────────
+function setPicker(lat, lng) {
+  placePickerAt(lat, lng, null);
+  map.setView([lat, lng], Math.max(map.getZoom(), 14));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Called FROM Python — clear the picker marker
+// ──────────────────────────────────────────────────────────────────────────
+function clearPicker() {
+  if (pickerMarker) {
+    map.removeLayer(pickerMarker);
+    pickerMarker = null;
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Bootstrap
+// ──────────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', initMap);
+</script>
+</body>
+</html>
