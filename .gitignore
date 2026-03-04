@@ -32,6 +32,9 @@ desktop.ini
 *.swp
 *.swo
 
+# Claude Code internal settings (tool-specific, not part of the project)
+.claude/
+
 # ExifTool backup files (should never appear with -overwrite_original)
 *_original
 
