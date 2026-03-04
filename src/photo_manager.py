@@ -28,6 +28,16 @@ log = logging.getLogger(__name__)
 THUMB_SIZE    = (200, 200)
 EXIF_DATE_FMT = "%Y:%m:%d %H:%M:%S"
 
+# Formats that fully support EXIF GPS + AllDates
+_EXIF_FORMATS: frozenset[str] = (
+    RAW_EXTENSIONS | JPEG_EXTENSIONS | frozenset({".tif", ".tiff", ".heic", ".heif"})
+)
+# Formats that use XMP (stored in iTXt / metadata chunk).
+# PNG: EXIF eXIf chunk triggers compatibility warnings → use XMP instead.
+# WebP: EXIF is optional; XMP is better supported across readers.
+_XMP_FORMATS: frozenset[str] = frozenset({".png", ".webp"})
+# BMP has NO metadata capability — only os.utime() is applied.
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ExifTool detection
@@ -259,12 +269,55 @@ def generate_thumbnail(item: PhotoItem) -> Optional[QPixmap]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _gps_tags(lat: float, lon: float) -> dict:
+    """EXIF GPS tags (for JPEG/TIFF/RAW/HEIC)."""
     return {
         "GPS:GPSLatitude":     abs(lat),
         "GPS:GPSLatitudeRef":  "N" if lat >= 0 else "S",
         "GPS:GPSLongitude":    abs(lon),
         "GPS:GPSLongitudeRef": "E" if lon >= 0 else "W",
     }
+
+
+def _tags_for_path(
+    path: Path,
+    gps: Optional[tuple[float, float]],
+    date_taken: Optional[datetime],
+    normalize_dates: bool,
+) -> dict:
+    """Return the format-appropriate ExifTool tag dict for *path*.
+
+    Strategy by format
+    ──────────────────
+    JPEG / TIFF / RAW / HEIC  → EXIF GPS tags  +  AllDates shortcut
+    PNG / WebP                 → XMP GPS tags   +  individual XMP date tags
+                                 (PNG's EXIF eXIf chunk causes compat warnings;
+                                  XMP via iTXt is universally accepted)
+    BMP / other                → empty dict  (os.utime() handles timestamps)
+    """
+    ext = path.suffix.lower()
+    tags: dict = {}
+
+    if ext in _EXIF_FORMATS:
+        if gps:
+            tags.update(_gps_tags(*gps))
+        if normalize_dates and date_taken:
+            # AllDates = ExifTool shortcut for DateTimeOriginal + CreateDate + ModifyDate
+            tags["AllDates"] = date_taken.strftime(EXIF_DATE_FMT)
+
+    elif ext in _XMP_FORMATS:
+        if gps:
+            lat, lon = gps
+            # XMP GPS uses signed decimal degrees; ExifTool stores as "47.6N" / "122.3W"
+            tags["XMP:GPSLatitude"]  = lat
+            tags["XMP:GPSLongitude"] = lon
+        if normalize_dates and date_taken:
+            dt_str = date_taken.strftime(EXIF_DATE_FMT)
+            tags["XMP:DateTimeOriginal"] = dt_str
+            tags["XMP:CreateDate"]       = dt_str
+            tags["XMP:ModifyDate"]       = dt_str
+
+    # BMP / anything else → empty tags dict; only os.utime() will run below
+    return tags
 
 
 def _write_exif_for_item(
@@ -274,34 +327,25 @@ def _write_exif_for_item(
 ) -> list[str]:
     """Write GPS and date tags for one item using an *already-open* et instance.
 
-    Returns warning strings (empty = success).
+    Each physical file is written with format-appropriate tags (EXIF vs XMP).
+    Returns warning strings (empty list = full success).
     """
-    warnings:  list[str] = []
-    all_paths  = [str(p) for p in item.all_paths]
-    gps        = item.pending.gps
+    warnings: list[str] = []
+    gps = item.pending.gps
 
-    tags: dict = {}
-    if gps:
-        tags.update(_gps_tags(*gps))
-    if normalize_dates and item.date_taken:
-        # "AllDates" is an ExifTool shortcut: sets DateTimeOriginal +
-        # CreateDate + ModifyDate in one pass
-        tags["AllDates"] = item.date_taken.strftime(EXIF_DATE_FMT)
-
-    if not tags:
-        return warnings
-
-    # Write each path individually so a single unsupported format (e.g. PNG)
-    # does not abort the other files in a RAW+JPEG pair or the whole batch.
-    for p in all_paths:
+    # Write format-specific metadata to each physical file
+    for path in item.all_paths:
+        tags = _tags_for_path(path, gps, item.date_taken, normalize_dates)
+        if not tags:
+            continue   # BMP or unknown format — nothing to write via ExifTool
         try:
-            et.set_tags([p], tags)
+            et.set_tags([str(path)], tags)
         except Exception as exc:
-            msg = f"ExifTool write error on '{Path(p).name}': {exc}"
+            msg = f"ExifTool write error on '{path.name}': {exc}"
             log.warning(msg)
             warnings.append(msg)
 
-    # ── Filesystem modification time (os.utime, more reliable than ExifTool) ─
+    # ── Filesystem modification time — works for ALL formats (incl. BMP) ──────
     if normalize_dates and item.date_taken:
         ts = item.date_taken.timestamp()
         for p in item.all_paths:
