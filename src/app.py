@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QSize, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QSize, QTimer, Signal, Slot, QSettings
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from .photo_item import PhotoItem
 from .photo_grid import PhotoGrid
 from .map_widget import MapWidget
+from .photo_preview import PhotoInfoBar
 from .workers import ScanThread, ThumbnailThread, SaveThread
 from .auto_tagger import auto_tag_by_time, preview_auto_tag
 from .photo_manager import EXIFTOOL_PATH
@@ -27,10 +28,11 @@ from .photo_manager import EXIFTOOL_PATH
 log = logging.getLogger(__name__)
 
 APP_TITLE = "GeoTag Photos"
+ORG_NAME  = "GeoTagPhotos"
 
 STYLE_DARK = """
 QMainWindow, QWidget          { background: #1a1a2e; color: #e2e8f0; }
-QSplitter::handle             { background: #2d3748; width: 3px; }
+QSplitter::handle             { background: #2d3748; width: 3px; height: 3px; }
 QPushButton {
     background: #2d3748; color: #e2e8f0;
     border: 1px solid #4a5568; border-radius: 5px;
@@ -42,51 +44,56 @@ QPushButton:disabled          { color: #4a5568; border-color: #2d3748; }
 QPushButton#btn_primary {
     background: #e94560; border-color: #e94560; color: #fff; font-weight: bold;
 }
-QPushButton#btn_primary:hover { background: #c73652; }
+QPushButton#btn_primary:hover    { background: #c73652; }
 QPushButton#btn_primary:disabled { background: #4a2030; border-color: #4a2030; }
 QPushButton#btn_assign {
     background: #0f3460; border-color: #1a5276; color: #fff; font-weight: bold;
 }
-QPushButton#btn_assign:hover  { background: #1a4a80; }
-QPushButton#btn_auto {
-    background: #065f46; border-color: #059669; color: #fff;
-}
-QPushButton#btn_auto:hover    { background: #047857; }
-QPushButton#btn_clear         { color: #f59e0b; border-color: #78350f; }
-QPushButton#btn_clear:hover   { background: #78350f; }
+QPushButton#btn_assign:hover     { background: #1a4a80; }
+QPushButton#btn_auto  { background: #065f46; border-color: #059669; color: #fff; }
+QPushButton#btn_auto:hover       { background: #047857; }
+QPushButton#btn_clear { color: #f59e0b; border-color: #78350f; }
+QPushButton#btn_clear:hover      { background: #78350f; }
 QLabel                        { color: #e2e8f0; }
 QLabel#lbl_dim                { color: #94a3b8; font-size: 11px; }
 QLabel#lbl_gps                { color: #f59e0b; font-size: 12px; font-weight: bold; }
 QLabel#lbl_pending            { color: #f59e0b; font-size: 11px; font-weight: bold; }
 QCheckBox                     { color: #e2e8f0; spacing: 6px; }
-QCheckBox::indicator          { width: 15px; height: 15px; border: 1px solid #4a5568;
-                                border-radius: 3px; background: #2d3748; }
-QCheckBox::indicator:checked  { background: #0f3460; border-color: #e94560;
-                                image: none; }
+QCheckBox::indicator {
+    width: 15px; height: 15px;
+    border: 1px solid #4a5568; border-radius: 3px; background: #2d3748;
+}
+QCheckBox::indicator:checked  { background: #0f3460; border-color: #e94560; }
 QDoubleSpinBox {
     background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568;
     border-radius: 4px; padding: 3px 6px; min-width: 80px;
 }
-QProgressBar {
-    background: #2d3748; border: none; border-radius: 3px;
-}
-QProgressBar::chunk           { background: #e94560; border-radius: 3px; }
+QProgressBar  { background: #2d3748; border: none; border-radius: 3px; }
+QProgressBar::chunk { background: #e94560; border-radius: 3px; }
 QGroupBox {
     border: 1px solid #2d3748; border-radius: 5px;
-    margin-top: 10px; padding-top: 6px;
-    color: #94a3b8; font-size: 11px;
+    margin-top: 10px; padding-top: 6px; color: #94a3b8; font-size: 11px;
 }
-QGroupBox::title              { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
 QScrollBar:vertical           { background: #1a1a2e; width: 8px; border: none; }
 QScrollBar::handle:vertical   { background: #2d3748; border-radius: 4px; min-height: 24px; }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical { height: 0; }
 QStatusBar                    { background: #16213e; color: #94a3b8; font-size: 11px; }
-QToolBar                      { background: #16213e; border: none; padding: 2px; spacing: 3px; }
-QToolBar::separator           { background: #2d3748; width: 1px; margin: 4px 2px; }
-QMenu { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; }
-QMenu::item:selected          { background: #0f3460; }
+QToolBar    { background: #16213e; border: none; padding: 2px; spacing: 3px; }
+QToolBar::separator { background: #2d3748; width: 1px; margin: 4px 2px; }
+QMenu       { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; }
+QMenu::item:selected { background: #0f3460; }
 """
+
+SETTINGS_GEOMETRY   = "window/geometry"
+SETTINGS_SPLITTER_H = "window/splitter_h"
+SETTINGS_SPLITTER_V = "window/splitter_v"
+SETTINGS_LAST_DIR   = "io/last_folder"
+SETTINGS_GAP        = "autotag/gap_minutes"
+SETTINGS_NORM_DATES = "save/normalize_dates"
+SETTINGS_RENAME     = "save/rename"
+SETTINGS_APPEND     = "save/append_original"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -103,7 +110,7 @@ class WarningsDialog(QDialog):
         te.setReadOnly(True)
         te.setPlainText("\n".join(warnings))
         te.setStyleSheet(
-            "background:#2d3748; color:#fbbf24; font-family: Consolas; font-size: 12px;"
+            "background:#2d3748; color:#fbbf24; font-family:Consolas; font-size:12px;"
         )
         layout.addWidget(te)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
@@ -120,8 +127,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1440, 920)
         self.setStyleSheet(STYLE_DARK)
+
+        self._settings = QSettings(ORG_NAME, APP_TITLE)
 
         self._scan_thread:  Optional[ScanThread]      = None
         self._thumb_thread: Optional[ThumbnailThread] = None
@@ -130,7 +138,6 @@ class MainWindow(QMainWindow):
         self._selected_gps: Optional[tuple[float, float]] = None
         self._all_items:    list[PhotoItem] = []
 
-        # Throttle expensive UI updates during bulk scan
         self._ui_update_timer = QTimer(self)
         self._ui_update_timer.setSingleShot(True)
         self._ui_update_timer.setInterval(200)
@@ -143,6 +150,7 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._build_statusbar()
         self._build_shortcuts()
+        self._restore_settings()
 
     # =========================================================================
     # UI construction
@@ -156,18 +164,18 @@ class MainWindow(QMainWindow):
 
         self._btn_open = QPushButton("📁  Open Folder")
         self._btn_open.clicked.connect(self._open_folder)
-        self._btn_open.setToolTip("Open a folder recursively (Ctrl+O)")
+        self._btn_open.setToolTip("Open a photo folder recursively (Ctrl+O)")
         tb.addWidget(self._btn_open)
 
         tb.addSeparator()
 
         self._btn_sel_all = QPushButton("☑  Select All")
-        self._btn_sel_all.clicked.connect(lambda: self._grid.select_all())
+        self._btn_sel_all.clicked.connect(self._grid.select_all)
         self._btn_sel_all.setEnabled(False)
         self._btn_sel_all.setToolTip("Select all photos (Ctrl+A)")
         tb.addWidget(self._btn_sel_all)
 
-        self._btn_sel_none = QPushButton("☐  Deselect All")
+        self._btn_sel_none = QPushButton("☐  Deselect")
         self._btn_sel_none.clicked.connect(self._grid.deselect_all)
         self._btn_sel_none.setEnabled(False)
         self._btn_sel_none.setToolTip("Deselect all (Escape)")
@@ -176,18 +184,15 @@ class MainWindow(QMainWindow):
         self._btn_sel_missing = QPushButton("🔴  Select Missing GPS")
         self._btn_sel_missing.clicked.connect(self._grid.select_missing_gps)
         self._btn_sel_missing.setEnabled(False)
-        self._btn_sel_missing.setToolTip("Select all photos that have no GPS data")
+        self._btn_sel_missing.setToolTip("Select every photo that has no GPS data")
         tb.addWidget(self._btn_sel_missing)
 
         tb.addSeparator()
 
-        # Pending GPS counter badge
         self._lbl_pending = QLabel("")
         self._lbl_pending.setObjectName("lbl_pending")
         self._lbl_pending.setVisible(False)
         tb.addWidget(self._lbl_pending)
-
-        tb.addSeparator()
 
         self._lbl_folder = QLabel("  No folder open")
         self._lbl_folder.setObjectName("lbl_dim")
@@ -200,32 +205,38 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal, central)
-        splitter.setChildrenCollapsible(False)
+        # ── Horizontal splitter: grid | right panel ───────────────────────────
+        self._splitter_h = QSplitter(Qt.Orientation.Horizontal, central)
+        self._splitter_h.setChildrenCollapsible(False)
 
-        # ── Left: photo grid ──────────────────────────────────────────────────
-        self._grid = PhotoGrid(splitter)
+        self._grid = PhotoGrid(self._splitter_h)
         self._grid.selection_changed.connect(self._on_selection_changed)
         self._grid.photo_activated.connect(self._on_photo_activated)
         self._grid.clear_gps_req.connect(self._clear_pending_gps_item)
         self._grid.show_in_explorer.connect(self._show_in_explorer)
-        splitter.addWidget(self._grid)
+        self._splitter_h.addWidget(self._grid)
 
-        # ── Right: map + controls ─────────────────────────────────────────────
-        right = QWidget(splitter)
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(0)
+        # ── Right side: vertical splitter map | preview bar | action panel ────
+        right = QWidget(self._splitter_h)
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
         self._map = MapWidget(right)
         self._map.location_picked.connect(self._on_location_picked)
-        rl.addWidget(self._map, stretch=1)
-        rl.addWidget(self._build_action_panel(right))
+        right_layout.addWidget(self._map, stretch=1)
 
-        splitter.addWidget(right)
-        splitter.setSizes([540, 900])
+        # Photo info bar (hidden until a single photo is selected)
+        self._info_bar = PhotoInfoBar(right)
+        self._info_bar.locate_requested.connect(self._show_in_explorer)
+        right_layout.addWidget(self._info_bar)
 
-        root.addWidget(splitter, stretch=1)
+        right_layout.addWidget(self._build_action_panel(right))
+
+        self._splitter_h.addWidget(right)
+        self._splitter_h.setSizes([530, 910])
+
+        root.addWidget(self._splitter_h, stretch=1)
 
         self._progress = QProgressBar(central)
         self._progress.setFixedHeight(5)
@@ -236,14 +247,14 @@ class MainWindow(QMainWindow):
     def _build_action_panel(self, parent: QWidget) -> QWidget:
         panel = QFrame(parent)
         panel.setStyleSheet(
-            "QFrame { background: #16213e; border-top: 1px solid #2d3748; }"
+            "QFrame { background:#16213e; border-top:1px solid #2d3748; }"
         )
         panel.setFixedHeight(218)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(6)
 
-        # ── Row 1: Map location + Assign ─────────────────────────────────────
+        # Row 1: Map location + Assign + Clear
         r1 = QHBoxLayout()
         gps_box = QGroupBox("Selected Map Location", panel)
         gl = QHBoxLayout(gps_box)
@@ -252,13 +263,14 @@ class MainWindow(QMainWindow):
         gl.addWidget(self._lbl_gps)
 
         vcol = QVBoxLayout()
+        vcol.setSpacing(4)
         self._btn_assign = QPushButton("📍  Assign GPS to Selected", panel)
         self._btn_assign.setObjectName("btn_assign")
         self._btn_assign.setEnabled(False)
         self._btn_assign.clicked.connect(self._assign_gps)
         self._btn_assign.setToolTip(
-            "Assign the picked location to selected photos (Ctrl+Return).\n"
-            "Changes are staged — use Save to write to disk."
+            "Assign the picked map location to selected photos (Ctrl+Return).\n"
+            "Changes are staged — click 'Save' to write to disk."
         )
         vcol.addWidget(self._btn_assign)
 
@@ -266,16 +278,14 @@ class MainWindow(QMainWindow):
         self._btn_clear_sel.setObjectName("btn_clear")
         self._btn_clear_sel.setEnabled(False)
         self._btn_clear_sel.clicked.connect(self._clear_pending_gps_selected)
-        self._btn_clear_sel.setToolTip(
-            "Remove staged (unsaved) GPS from selected photos (Delete)"
-        )
+        self._btn_clear_sel.setToolTip("Remove unsaved GPS from selected photos (Delete)")
         vcol.addWidget(self._btn_clear_sel)
 
         r1.addWidget(gps_box, stretch=1)
         r1.addLayout(vcol)
         lay.addLayout(r1)
 
-        # ── Row 2: Auto-tag ──────────────────────────────────────────────────
+        # Row 2: Auto-tag
         r2 = QHBoxLayout()
         auto_box = QGroupBox("Auto-tag by shooting time", panel)
         al = QHBoxLayout(auto_box)
@@ -294,13 +304,13 @@ class MainWindow(QMainWindow):
         self._btn_auto.clicked.connect(self._auto_tag)
         self._btn_auto.setToolTip(
             "Copy GPS from a geotagged photo to any un-tagged photo\n"
-            "taken within the time gap. Shows a preview first."
+            "within the time gap. Shows a preview before applying."
         )
         r2.addWidget(auto_box, stretch=1)
         r2.addWidget(self._btn_auto)
         lay.addLayout(r2)
 
-        # ── Row 3: Save options ───────────────────────────────────────────────
+        # Row 3: Save options
         r3 = QHBoxLayout()
         opts_box = QGroupBox("Save Options", panel)
         ol = QHBoxLayout(opts_box)
@@ -308,7 +318,7 @@ class MainWindow(QMainWindow):
         self._chk_norm_dates = QCheckBox("Normalize dates → Date Taken", opts_box)
         self._chk_norm_dates.setChecked(True)
         self._chk_norm_dates.setToolTip(
-            "Set ModifyDate, CreateDate and file timestamp = DateTimeOriginal"
+            "Set ModifyDate, CreateDate and filesystem timestamp = DateTimeOriginal"
         )
         ol.addWidget(self._chk_norm_dates)
 
@@ -330,7 +340,7 @@ class MainWindow(QMainWindow):
         r3.addWidget(opts_box, stretch=1)
         lay.addLayout(r3)
 
-        # ── Row 4: Info + Save ────────────────────────────────────────────────
+        # Row 4: Info + Save
         r4 = QHBoxLayout()
         self._lbl_sel_info = QLabel("No photos loaded", panel)
         self._lbl_sel_info.setObjectName("lbl_dim")
@@ -342,7 +352,8 @@ class MainWindow(QMainWindow):
         self._btn_save.clicked.connect(self._save_changes)
         self._btn_save.setToolTip(
             "Write GPS + date changes to disk (Ctrl+S).\n"
-            "All original metadata is preserved — only touched tags change."
+            "All original metadata is preserved — only touched tags change.\n"
+            "Uses a single ExifTool process for all files (fast)."
         )
         r4.addWidget(self._btn_save)
         lay.addLayout(r4)
@@ -354,9 +365,9 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
         self._lbl_status = QLabel("Ready")
         sb.addWidget(self._lbl_status, 1)
-
-        # Right-side keyboard hint
-        hint = QLabel("Ctrl+A select all  |  Ctrl+Return assign GPS  |  Del clear pending  |  Ctrl+S save")
+        hint = QLabel(
+            "Ctrl+O open  |  Ctrl+A select all  |  Ctrl+↵ assign GPS  |  Del clear pending  |  Ctrl+S save"
+        )
         hint.setObjectName("lbl_dim")
         sb.addPermanentWidget(hint)
 
@@ -376,18 +387,61 @@ class MainWindow(QMainWindow):
         _act("Backspace",   self._clear_pending_gps_selected)
 
     # =========================================================================
+    # Settings persistence
+    # =========================================================================
+
+    def _restore_settings(self):
+        """Restore window geometry and user preferences from last session."""
+        geom = self._settings.value(SETTINGS_GEOMETRY)
+        if geom:
+            self.restoreGeometry(geom)
+        else:
+            self.resize(1440, 920)
+
+        splitter_sizes = self._settings.value(SETTINGS_SPLITTER_H)
+        if splitter_sizes:
+            try:
+                self._splitter_h.restoreState(splitter_sizes)
+            except Exception:
+                self._splitter_h.setSizes([530, 910])
+
+        gap = self._settings.value(SETTINGS_GAP, 3.0, type=float)
+        self._spin_gap.setValue(gap)
+
+        norm = self._settings.value(SETTINGS_NORM_DATES, True, type=bool)
+        self._chk_norm_dates.setChecked(norm)
+
+        rename = self._settings.value(SETTINGS_RENAME, False, type=bool)
+        self._chk_rename.setChecked(rename)
+
+        append = self._settings.value(SETTINGS_APPEND, False, type=bool)
+        self._chk_append_orig.setChecked(append)
+        self._chk_append_orig.setEnabled(rename)
+
+    def _save_settings(self):
+        """Persist window geometry and user preferences."""
+        self._settings.setValue(SETTINGS_GEOMETRY,   self.saveGeometry())
+        self._settings.setValue(SETTINGS_SPLITTER_H, self._splitter_h.saveState())
+        self._settings.setValue(SETTINGS_GAP,        self._spin_gap.value())
+        self._settings.setValue(SETTINGS_NORM_DATES, self._chk_norm_dates.isChecked())
+        self._settings.setValue(SETTINGS_RENAME,     self._chk_rename.isChecked())
+        self._settings.setValue(SETTINGS_APPEND,     self._chk_append_orig.isChecked())
+
+    # =========================================================================
     # Folder loading
     # =========================================================================
 
     def _open_folder(self):
+        last = self._settings.value(SETTINGS_LAST_DIR,
+                                    str(Path.home() / "Pictures"), type=str)
         folder_str = QFileDialog.getExistingDirectory(
-            self, "Select Photo Folder",
-            str(Path.home() / "Pictures"),
+            self, "Select Photo Folder", last,
             QFileDialog.Option.ShowDirsOnly,
         )
         if not folder_str:
             return
         folder = Path(folder_str)
+        self._settings.setValue(SETTINGS_LAST_DIR, folder_str)
 
         for t in [self._scan_thread, self._thumb_thread]:
             if t and t.isRunning():
@@ -396,8 +450,10 @@ class MainWindow(QMainWindow):
                 t.wait(3000)
 
         self._grid.clear()
+        self._grid.set_base_folder(folder)
         self._all_items.clear()
         self._selected_gps = None
+        self._info_bar.set_item(None)
         self._lbl_folder.setText(f"  {folder_str}")
         self._lbl_pending.setVisible(False)
         self._update_action_states()
@@ -417,7 +473,6 @@ class MainWindow(QMainWindow):
     def _on_item_ready(self, item: PhotoItem):
         self._all_items.append(item)
         self._grid.add_item(item)
-        # Throttle status + button updates — don't do per-photo
         if len(self._all_items) % 25 == 0:
             self._status(f"Loading…  {len(self._all_items)} photos found")
         self._ui_update_timer.start()
@@ -446,6 +501,9 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_thumbnail_ready(self, item: PhotoItem):
         self._grid.refresh_cell(item)
+        # Update info bar if this is the currently previewed item
+        if self._info_bar._item is item:
+            self._info_bar.refresh()
 
     @Slot()
     def _on_thumbnails_done(self):
@@ -469,6 +527,9 @@ class MainWindow(QMainWindow):
         self._lbl_sel_info.setText(f"{n} of {total} selected{gps_hint}")
         self._update_action_states()
 
+        # Show/update info bar for single selection
+        self._info_bar.set_item(selected[0] if n == 1 else None)
+
         # Single selection with GPS → fly map there
         if n == 1:
             item = selected[0]
@@ -481,12 +542,13 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_photo_activated(self, item: PhotoItem):
+        """Double-click: fly map to the photo's GPS location."""
         g = item.effective_gps
         if g:
             self._map.fly_to(*g, zoom=15)
 
     # =========================================================================
-    # Map → GPS pick
+    # Map GPS pick
     # =========================================================================
 
     @Slot(float, float, str)
@@ -497,9 +559,9 @@ class MainWindow(QMainWindow):
             self._lbl_gps.setToolTip(label)
         self._update_action_states()
         selected = self._grid.selected_items()
-        gps_hint = f"  |  Map: {lat:.6f}, {lon:.6f}"
         self._lbl_sel_info.setText(
-            f"{len(selected)} of {len(self._all_items)} selected{gps_hint}"
+            f"{len(selected)} of {len(self._all_items)} selected"
+            f"  |  Map: {lat:.6f}, {lon:.6f}"
         )
 
     # =========================================================================
@@ -520,11 +582,12 @@ class MainWindow(QMainWindow):
             item.pending.gps = (lat, lon)
 
         self._grid.refresh_all()
+        self._info_bar.refresh()
         self._map.show_photo_markers(self._all_items)
         self._update_action_states()
         self._status(
             f"📍 GPS {lat:.6f}, {lon:.6f} staged for {len(selected)} photo(s) — "
-            "click 'Save All Changes' to write to disk."
+            "click 'Save All Changes' to write."
         )
 
     # =========================================================================
@@ -538,6 +601,7 @@ class MainWindow(QMainWindow):
         for item in selected:
             item.pending.gps = None
         self._grid.refresh_all()
+        self._info_bar.refresh()
         self._map.show_photo_markers(self._all_items)
         self._update_action_states()
         self._status(f"Cleared pending GPS from {len(selected)} photo(s).")
@@ -548,6 +612,7 @@ class MainWindow(QMainWindow):
         if item.pending.gps:
             item.pending.gps = None
             self._grid.refresh_cell(item)
+            self._info_bar.refresh()
             self._map.show_photo_markers(self._all_items)
             self._update_action_states()
             self._status(f"Cleared pending GPS from {item.display_name}.")
@@ -558,19 +623,17 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _show_in_explorer(self, item: PhotoItem):
-        path = item.display_path
         try:
-            # /select highlights the file in Explorer
-            subprocess.Popen(["explorer", "/select,", str(path.resolve())])
+            subprocess.Popen(["explorer", "/select,", str(item.display_path.resolve())])
         except Exception as exc:
-            log.warning("Could not open Explorer: %s", exc)
+            log.warning("Explorer open failed: %s", exc)
 
     # =========================================================================
     # Auto-tag
     # =========================================================================
 
     def _auto_tag(self):
-        gap = self._spin_gap.value()
+        gap     = self._spin_gap.value()
         preview = preview_auto_tag(self._all_items, gap)
 
         if not preview:
@@ -581,10 +644,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Preview dialog
         lines = [
             f"Auto-tag will stage GPS on <b>{len(preview)}</b> photo(s) "
-            f"within <b>{gap:.1f} min</b> of a geotagged photo.<br>",
+            f"within <b>{gap:.1f} min</b> of a geotagged photo.<br><br>"
             "Sample matches:<br>",
         ]
         for item, gps, anchor in preview[:6]:
@@ -596,8 +658,7 @@ class MainWindow(QMainWindow):
             lines.append(f"<br>&nbsp;&nbsp;… and {len(preview) - 6} more.")
 
         reply = QMessageBox.question(
-            self, "Confirm Auto-tag",
-            "".join(lines),
+            self, "Confirm Auto-tag", "".join(lines),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -605,11 +666,11 @@ class MainWindow(QMainWindow):
 
         tagged = auto_tag_by_time(self._all_items, gap)
         self._grid.refresh_all()
+        self._info_bar.refresh()
         self._map.show_photo_markers(self._all_items)
         self._update_action_states()
         self._status(
-            f"⚡ Auto-tagged {len(tagged)} photo(s) — "
-            "click 'Save All Changes' to write."
+            f"⚡ Auto-tagged {len(tagged)} photo(s) — click 'Save All Changes' to write."
         )
 
     # =========================================================================
@@ -629,17 +690,19 @@ class MainWindow(QMainWindow):
         norm_dates  = self._chk_norm_dates.isChecked()
         do_rename   = self._chk_rename.isChecked()
         append_orig = self._chk_append_orig.isChecked()
+        n_files     = sum(len(i.all_paths) for i in to_save)
 
-        # Confirmation
-        bullet = lambda b, t: f"• {t}<br>" if b else ""  # noqa: E731
+        bullet = lambda b, t: f"• {t}<br>" if b else ""   # noqa: E731
         body = (
-            f"About to write changes to <b>{len(to_save)}</b> logical photo(s) "
-            f"(<b>{sum(len(i.all_paths) for i in to_save)}</b> physical files):<br><br>"
+            f"About to update <b>{len(to_save)}</b> photo(s) "
+            f"(<b>{n_files}</b> physical files):<br><br>"
             "• Write GPS coordinates to EXIF<br>"
             + bullet(norm_dates, "Normalize all date fields → DateTimeOriginal")
-            + bullet(do_rename,  f"Rename files to  YYYYMMDD HHMMSS{' + original name' if append_orig else ''}.ext")
+            + bullet(do_rename,
+                     f"Rename to  YYYYMMDD HHMMSS{' + original name' if append_orig else ''}.ext")
             + "<br><b>All other metadata is preserved.</b><br>"
-            "No backup files are created (ExifTool overwrites in-place)."
+            "Uses a single ExifTool process — fast even for hundreds of files.<br>"
+            "No backup files are created (overwrites in-place)."
         )
         reply = QMessageBox.question(
             self, "Confirm Save", body,
@@ -668,8 +731,9 @@ class MainWindow(QMainWindow):
     def _on_save_done(self, warnings: list[str]):
         self._progress.setVisible(False)
         self._grid.refresh_all()
+        self._info_bar.refresh()
         self._map.show_photo_markers(self._all_items)
-        self._set_busy(False)           # sets all enabled correctly via _update inside
+        self._set_busy(False)   # also calls _update_action_states
 
         n_ok   = sum(1 for i in self._all_items if i.has_gps)
         n_miss = len(self._all_items) - n_ok
@@ -703,20 +767,20 @@ class MainWindow(QMainWindow):
         self._chk_append_orig.setEnabled(checked)
 
     def _update_action_states(self):
-        has_items      = bool(self._all_items)
-        selected       = self._grid.selected_items()
-        has_selected   = bool(selected)
-        has_map_gps    = self._selected_gps is not None
-        n_pending      = sum(1 for i in self._all_items if i.pending.gps)
-        has_pending    = n_pending > 0
-        has_anchors    = any(i.effective_gps for i in self._all_items)
-        sel_has_pending= any(i.pending.gps for i in selected)
+        has_items     = bool(self._all_items)
+        selected      = self._grid.selected_items()
+        has_sel       = bool(selected)
+        has_map_gps   = self._selected_gps is not None
+        n_pending     = sum(1 for i in self._all_items if i.pending.gps)
+        has_pending   = n_pending > 0
+        has_anchors   = any(i.effective_gps for i in self._all_items)
+        sel_pending   = any(i.pending.gps for i in selected)
 
         self._btn_sel_all.setEnabled(has_items)
         self._btn_sel_none.setEnabled(has_items)
         self._btn_sel_missing.setEnabled(has_items)
-        self._btn_assign.setEnabled(has_selected and has_map_gps)
-        self._btn_clear_sel.setEnabled(has_selected and sel_has_pending)
+        self._btn_assign.setEnabled(has_sel and has_map_gps)
+        self._btn_clear_sel.setEnabled(has_sel and sel_pending)
         self._btn_auto.setEnabled(has_items and has_anchors)
         self._btn_save.setEnabled(has_pending)
 
@@ -727,12 +791,10 @@ class MainWindow(QMainWindow):
             self._lbl_pending.setVisible(False)
 
     def _set_busy(self, busy: bool):
-        """Disable/enable main action buttons during background operations."""
         for w in [self._btn_open, self._btn_assign, self._btn_auto,
                   self._btn_save, self._btn_clear_sel]:
             w.setEnabled(not busy)
         if not busy:
-            # Re-compute correct enabled states after operation
             self._update_action_states()
 
     def _status(self, msg: str):
@@ -742,7 +804,7 @@ class MainWindow(QMainWindow):
     def _warn_no_exiftool(self):
         QMessageBox.warning(
             self, "ExifTool Not Found",
-            "ExifTool was not found.\n\n"
+            "ExifTool was not found on this system.\n\n"
             "Download the Windows Executable from:\n"
             "  https://exiftool.org\n\n"
             "Then either:\n"
@@ -752,6 +814,7 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
+        self._save_settings()
         for t in [self._scan_thread, self._thumb_thread, self._save_thread]:
             if t and t.isRunning():
                 if hasattr(t, "cancel"):
