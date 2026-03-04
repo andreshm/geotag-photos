@@ -170,19 +170,19 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         self._btn_sel_all = QPushButton("☑  Select All")
-        self._btn_sel_all.clicked.connect(self._grid.select_all)
+        self._btn_sel_all.clicked.connect(lambda: self._grid.select_all())
         self._btn_sel_all.setEnabled(False)
         self._btn_sel_all.setToolTip("Select all photos (Ctrl+A)")
         tb.addWidget(self._btn_sel_all)
 
         self._btn_sel_none = QPushButton("☐  Deselect")
-        self._btn_sel_none.clicked.connect(self._grid.deselect_all)
+        self._btn_sel_none.clicked.connect(lambda: self._grid.deselect_all())
         self._btn_sel_none.setEnabled(False)
         self._btn_sel_none.setToolTip("Deselect all (Escape)")
         tb.addWidget(self._btn_sel_none)
 
         self._btn_sel_missing = QPushButton("🔴  Select Missing GPS")
-        self._btn_sel_missing.clicked.connect(self._grid.select_missing_gps)
+        self._btn_sel_missing.clicked.connect(lambda: self._grid.select_missing_gps())
         self._btn_sel_missing.setEnabled(False)
         self._btn_sel_missing.setToolTip("Select every photo that has no GPS data")
         tb.addWidget(self._btn_sel_missing)
