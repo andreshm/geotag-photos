@@ -74,17 +74,24 @@ def scan_folder(folder: Path) -> list[PhotoItem]:
 
     seen:      set[Path] = set()
     all_files: list[Path] = []
+
+    def _collect(paths):
+        for p in paths:
+            # Skip files that live inside any directory named "GPSOK"
+            try:
+                rel_parts = p.relative_to(folder).parts[:-1]
+            except ValueError:
+                rel_parts = ()
+            if any(part.upper() == "GPSOK" for part in rel_parts):
+                continue
+            lo = p.resolve()
+            if lo not in seen:
+                seen.add(lo)
+                all_files.append(p)
+
     for ext in SUPPORTED_EXTENSIONS:
-        for p in folder.rglob(f"*{ext}"):
-            lo = p.resolve()
-            if lo not in seen:
-                seen.add(lo)
-                all_files.append(p)
-        for p in folder.rglob(f"*{ext.upper()}"):
-            lo = p.resolve()
-            if lo not in seen:
-                seen.add(lo)
-                all_files.append(p)
+        _collect(folder.rglob(f"*{ext}"))
+        _collect(folder.rglob(f"*{ext.upper()}"))
 
     all_files.sort(key=lambda p: (str(p.parent), p.stem.lower(), p.suffix.lower()))
 
@@ -284,13 +291,15 @@ def _write_exif_for_item(
     if not tags:
         return warnings
 
-    try:
-        et.set_tags(all_paths, tags)
-    except Exception as exc:
-        msg = f"ExifTool write error on '{item.display_name}': {exc}"
-        log.error(msg)
-        warnings.append(msg)
-        return warnings
+    # Write each path individually so a single unsupported format (e.g. PNG)
+    # does not abort the other files in a RAW+JPEG pair or the whole batch.
+    for p in all_paths:
+        try:
+            et.set_tags([p], tags)
+        except Exception as exc:
+            msg = f"ExifTool write error on '{Path(p).name}': {exc}"
+            log.warning(msg)
+            warnings.append(msg)
 
     # ── Filesystem modification time (os.utime, more reliable than ExifTool) ─
     if normalize_dates and item.date_taken:
@@ -342,21 +351,69 @@ def _rename_item(item: PhotoItem, append_original: bool) -> list[str]:
     return warnings
 
 
+def _copy_to_gpsok(item: PhotoItem) -> list[str]:
+    """Copy all physical files for *item* into a 'GPSOK' subfolder.
+
+    The item's path attributes are updated to point at the copies so
+    subsequent EXIF writes and renames target the copies, leaving the
+    original files completely untouched.
+    """
+    warnings: list[str] = []
+    gpsok_dir = item.folder / "GPSOK"
+    try:
+        gpsok_dir.mkdir(exist_ok=True)
+    except OSError as exc:
+        return [f"Cannot create GPSOK folder '{gpsok_dir}': {exc}"]
+
+    for path in list(item.all_paths):
+        dest = gpsok_dir / path.name
+        # Avoid silently overwriting an existing copy
+        counter = 1
+        while dest.exists():
+            dest = gpsok_dir / f"{path.stem} ({counter}){path.suffix}"
+            counter += 1
+        try:
+            shutil.copy2(str(path), str(dest))   # preserves timestamps + metadata
+        except OSError as exc:
+            warnings.append(f"Copy failed '{path.name}' → GPSOK: {exc}")
+            continue
+        # Redirect item path references to the new copy
+        if path == item.display_path:
+            item.display_path = dest
+        if path == item.jpeg_path:
+            item.jpeg_path = dest
+        if path == item.raw_path:
+            item.raw_path = dest
+
+    return warnings
+
+
 def apply_changes_batch(
     items: list[PhotoItem],
     normalize_dates: bool = False,
     do_rename: bool = False,
     append_original: bool = False,
+    copy_to_gpsok: bool = False,
     progress_callback=None,
 ) -> list[str]:
     """Write GPS + dates for all *items* using a SINGLE ExifTool process.
 
     Opening one process for N photos instead of N processes is roughly
     10–50× faster for large batches (eliminates Perl startup per file).
+
+    If *copy_to_gpsok* is True, files are first copied to a 'GPSOK'
+    subfolder (next to each file's parent folder); all writes and renames
+    then target the copies — originals are left completely unchanged.
+
     Renames happen after all ExifTool writes have completed.
     """
     all_warnings: list[str] = []
     total         = len(items)
+
+    # ── Phase 0: Copy to GPSOK (if requested) — before any writes ────────────
+    if copy_to_gpsok:
+        for item in items:
+            all_warnings.extend(_copy_to_gpsok(item))
 
     # ── Phase 1: EXIF writes (one ExifTool instance for everything) ───────────
     try:

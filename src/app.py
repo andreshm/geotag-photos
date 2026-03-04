@@ -94,6 +94,7 @@ SETTINGS_GAP        = "autotag/gap_minutes"
 SETTINGS_NORM_DATES = "save/normalize_dates"
 SETTINGS_RENAME     = "save/rename"
 SETTINGS_APPEND     = "save/append_original"
+SETTINGS_GPSOK      = "save/copy_to_gpsok"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ class MainWindow(QMainWindow):
         panel.setStyleSheet(
             "QFrame { background:#16213e; border-top:1px solid #2d3748; }"
         )
-        panel.setFixedHeight(218)
+        panel.setFixedHeight(244)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(6)
@@ -313,7 +314,12 @@ class MainWindow(QMainWindow):
         # Row 3: Save options
         r3 = QHBoxLayout()
         opts_box = QGroupBox("Save Options", panel)
-        ol = QHBoxLayout(opts_box)
+        ov = QVBoxLayout(opts_box)
+        ov.setSpacing(4)
+
+        # Sub-row A: date normalise + rename options
+        ol = QHBoxLayout()
+        ol.setSpacing(8)
 
         self._chk_norm_dates = QCheckBox("Normalize dates → Date Taken", opts_box)
         self._chk_norm_dates.setChecked(True)
@@ -336,6 +342,20 @@ class MainWindow(QMainWindow):
         self._chk_append_orig.setToolTip("e.g.  20240715 134522 IMG_4823.JPG")
         ol.addWidget(self._chk_append_orig)
         ol.addStretch()
+        ov.addLayout(ol)
+
+        # Sub-row B: GPSOK copy
+        self._chk_gpsok = QCheckBox(
+            '📁  Copy to "GPSOK" subfolder  (non-destructive — originals unchanged)',
+            opts_box,
+        )
+        self._chk_gpsok.setToolTip(
+            "Files are copied to a 'GPSOK' folder next to each source folder.\n"
+            "GPS, dates and renames are written to the COPIES.\n"
+            "Original files are never modified.\n"
+            "GPSOK folders are automatically excluded from future scans."
+        )
+        ov.addWidget(self._chk_gpsok)
 
         r3.addWidget(opts_box, stretch=1)
         lay.addLayout(r3)
@@ -418,6 +438,9 @@ class MainWindow(QMainWindow):
         self._chk_append_orig.setChecked(append)
         self._chk_append_orig.setEnabled(rename)
 
+        gpsok = self._settings.value(SETTINGS_GPSOK, False, type=bool)
+        self._chk_gpsok.setChecked(gpsok)
+
     def _save_settings(self):
         """Persist window geometry and user preferences."""
         self._settings.setValue(SETTINGS_GEOMETRY,   self.saveGeometry())
@@ -426,6 +449,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue(SETTINGS_NORM_DATES, self._chk_norm_dates.isChecked())
         self._settings.setValue(SETTINGS_RENAME,     self._chk_rename.isChecked())
         self._settings.setValue(SETTINGS_APPEND,     self._chk_append_orig.isChecked())
+        self._settings.setValue(SETTINGS_GPSOK,      self._chk_gpsok.isChecked())
 
     # =========================================================================
     # Folder loading
@@ -687,22 +711,29 @@ class MainWindow(QMainWindow):
             )
             return
 
-        norm_dates  = self._chk_norm_dates.isChecked()
-        do_rename   = self._chk_rename.isChecked()
-        append_orig = self._chk_append_orig.isChecked()
-        n_files     = sum(len(i.all_paths) for i in to_save)
+        norm_dates    = self._chk_norm_dates.isChecked()
+        do_rename     = self._chk_rename.isChecked()
+        append_orig   = self._chk_append_orig.isChecked()
+        copy_to_gpsok = self._chk_gpsok.isChecked()
+        n_files       = sum(len(i.all_paths) for i in to_save)
 
         bullet = lambda b, t: f"• {t}<br>" if b else ""   # noqa: E731
         body = (
-            f"About to update <b>{len(to_save)}</b> photo(s) "
+            f"About to process <b>{len(to_save)}</b> photo(s) "
             f"(<b>{n_files}</b> physical files):<br><br>"
-            "• Write GPS coordinates to EXIF<br>"
+            + bullet(copy_to_gpsok,
+                     'Copy files to a <b>GPSOK</b> subfolder first '
+                     '(originals will <b>not</b> be modified)')
+            + "• Write GPS coordinates to EXIF<br>"
             + bullet(norm_dates, "Normalize all date fields → DateTimeOriginal")
             + bullet(do_rename,
-                     f"Rename to  YYYYMMDD HHMMSS{' + original name' if append_orig else ''}.ext")
+                     f"Rename to  YYYYMMDD HHMMSS"
+                     f"{' + original name' if append_orig else ''}.ext")
             + "<br><b>All other metadata is preserved.</b><br>"
-            "Uses a single ExifTool process — fast even for hundreds of files.<br>"
-            "No backup files are created (overwrites in-place)."
+            + ("Originals are untouched — only GPSOK copies are modified.<br>"
+               if copy_to_gpsok else
+               "Uses a single ExifTool process — fast even for hundreds of files.<br>"
+               "No backup files are created (overwrites in-place).")
         )
         reply = QMessageBox.question(
             self, "Confirm Save", body,
@@ -716,7 +747,9 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._progress.setVisible(True)
 
-        self._save_thread = SaveThread(to_save, norm_dates, do_rename, append_orig, self)
+        self._save_thread = SaveThread(
+            to_save, norm_dates, do_rename, append_orig, copy_to_gpsok, self
+        )
         self._save_thread.progress.connect(self._on_save_progress)
         self._save_thread.done.connect(self._on_save_done)
         self._save_thread.error.connect(self._on_save_error)

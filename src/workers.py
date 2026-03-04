@@ -148,6 +148,7 @@ class SaveWorker(QObject):
         normalize_dates: bool,
         do_rename: bool,
         append_original: bool,
+        copy_to_gpsok: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -155,6 +156,7 @@ class SaveWorker(QObject):
         self._normalize_dates = normalize_dates
         self._do_rename = do_rename
         self._append_original = append_original
+        self._copy_to_gpsok = copy_to_gpsok
 
     def run(self):
         try:
@@ -163,6 +165,7 @@ class SaveWorker(QObject):
                 normalize_dates=self._normalize_dates,
                 do_rename=self._do_rename,
                 append_original=self._append_original,
+                copy_to_gpsok=self._copy_to_gpsok,
                 progress_callback=lambda n, t: self.progress.emit(n, t),
             )
             self.done.emit(warnings)
@@ -181,10 +184,13 @@ class SaveThread(QThread):
         normalize_dates: bool,
         do_rename: bool,
         append_original: bool,
+        copy_to_gpsok: bool = False,
         parent=None,
     ):
         super().__init__(parent)
-        self._worker = SaveWorker(items, normalize_dates, do_rename, append_original)
+        self._worker = SaveWorker(
+            items, normalize_dates, do_rename, append_original, copy_to_gpsok
+        )
         self._worker.progress.connect(self.progress)
         self._worker.done.connect(self.done)
         self._worker.error.connect(self.error)
