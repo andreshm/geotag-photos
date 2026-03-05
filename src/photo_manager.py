@@ -167,14 +167,23 @@ def _parse_gps_coord(value, ref: Optional[str]) -> Optional[float]:
 
 
 def load_metadata(items: list[PhotoItem]) -> None:
-    """Batch-read EXIF date + GPS for all items in one ExifTool call."""
+    """Batch-read EXIF/XMP date + GPS for all items in one ExifTool call.
+
+    Tag keys in ExifTool's JSON output are bare names (no group prefix)
+    unless -G1 is active — which we don't use.  Requesting and looking up
+    tags *without* a group prefix is therefore the only correct approach and
+    has the added benefit that ExifTool merges EXIF and XMP namespaces for
+    us: a PNG tagged with XMP:GPSLatitude is returned as plain "GPSLatitude".
+    """
     if not items:
         return
     paths = [str(i.display_path) for i in items]
-    tags  = [
-        "EXIF:DateTimeOriginal", "EXIF:CreateDate", "EXIF:ModifyDate",
-        "GPS:GPSLatitude", "GPS:GPSLatitudeRef",
-        "GPS:GPSLongitude", "GPS:GPSLongitudeRef",
+    # No group prefix → ExifTool returns keys as bare names ("GPSLatitude" etc.)
+    # and will merge EXIF / XMP sources automatically.
+    tags = [
+        "DateTimeOriginal", "CreateDate",
+        "GPSLatitude", "GPSLatitudeRef",
+        "GPSLongitude", "GPSLongitudeRef",
     ]
     try:
         with _et_reader() as et:
@@ -184,16 +193,12 @@ def load_metadata(items: list[PhotoItem]) -> None:
         return
 
     for item, meta in zip(items, results):
-        raw_date = (
-            meta.get("EXIF:DateTimeOriginal")
-            or meta.get("EXIF:CreateDate")
-            or meta.get("EXIF:ModifyDate")
-        )
+        raw_date = meta.get("DateTimeOriginal") or meta.get("CreateDate")
         item.date_taken = _parse_exif_date(raw_date)
-        item.gps_lat    = _parse_gps_coord(meta.get("GPS:GPSLatitude"),
-                                            meta.get("GPS:GPSLatitudeRef"))
-        item.gps_lon    = _parse_gps_coord(meta.get("GPS:GPSLongitude"),
-                                            meta.get("GPS:GPSLongitudeRef"))
+        item.gps_lat    = _parse_gps_coord(meta.get("GPSLatitude"),
+                                            meta.get("GPSLatitudeRef"))
+        item.gps_lon    = _parse_gps_coord(meta.get("GPSLongitude"),
+                                            meta.get("GPSLongitudeRef"))
         item._metadata_loaded = True
 
 
