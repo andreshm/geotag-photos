@@ -278,6 +278,43 @@ def _gps_tags(lat: float, lon: float) -> dict:
     }
 
 
+# Magic-byte signatures (12 bytes is enough for all we need)
+_MAGIC: list[tuple[bytes, str]] = [
+    (b"\xff\xd8\xff",           ".jpg"),   # JPEG
+    (b"\x89PNG\r\n\x1a\n",     ".png"),   # PNG
+    (b"II\x2a\x00",            ".tiff"),  # TIFF (little-endian)
+    (b"MM\x00\x2a",            ".tiff"),  # TIFF (big-endian)
+    (b"BM",                    ".bmp"),   # BMP
+    # WebP: needs 12-byte check (RIFF????WEBP)
+]
+
+
+def _detect_format_ext(path: Path) -> str:
+    """Detect actual file format from magic bytes; fall back to extension.
+
+    File extensions can lie (e.g. a JPEG saved with a .png suffix).
+    Reading the first 12 bytes is cheap and definitive for the common cases.
+    For RAW/HEIC formats we trust the extension — cameras always write it
+    correctly and their magic bytes are complex / model-specific.
+    """
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(12)
+    except OSError:
+        return path.suffix.lower()
+
+    # WebP: RIFF<4-byte-size>WEBP
+    if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return ".webp"
+
+    for magic, ext in _MAGIC:
+        if header[: len(magic)] == magic:
+            return ext
+
+    # Unknown magic → trust the declared extension (handles RAW, HEIC, …)
+    return path.suffix.lower()
+
+
 def _tags_for_path(
     path: Path,
     gps: Optional[tuple[float, float]],
@@ -285,6 +322,9 @@ def _tags_for_path(
     normalize_dates: bool,
 ) -> dict:
     """Return the format-appropriate ExifTool tag dict for *path*.
+
+    Actual format is detected from magic bytes, not the extension, so
+    misnamed files (e.g. a JPEG saved as .png) are handled correctly.
 
     Strategy by format
     ──────────────────
@@ -294,7 +334,16 @@ def _tags_for_path(
                                   XMP via iTXt is universally accepted)
     BMP / other                → empty dict  (os.utime() handles timestamps)
     """
-    ext = path.suffix.lower()
+    ext = _detect_format_ext(path)
+
+    # Warn once per file when extension and actual format disagree
+    declared = path.suffix.lower()
+    if ext != declared and declared in SUPPORTED_EXTENSIONS:
+        log.warning(
+            "'%s' has extension %s but magic bytes say %s — writing as %s",
+            path.name, declared, ext, ext,
+        )
+
     tags: dict = {}
 
     if ext in _EXIF_FORMATS:
