@@ -1045,16 +1045,31 @@ def apply_changes_batch(
     backup_service: Optional[BackupService] = None,
     progress_callback=None,
 ) -> list[str]:
-    """Write GPS + dates for all *items* (Photos & Videos) after backing up original files."""
+    """Write GPS + dates for modified *items* (Photos & Videos) after backing up original files."""
     all_warnings: list[str] = []
-    total = len(items)
     service = backup_service or BackupService()
 
-    log.info("apply_changes_batch starting for %d items (norm_dates=%s, do_rename=%s, smart_undated=%s, append_orig=%s)",
-             total, normalize_dates, do_rename, smart_undated_only, append_original)
-
-    # Ensure all items have date_taken populated from file mtime before EXIF write touches timestamps
+    # Strict Actionable Filter: Only process files that actually have changes
+    actionable_items: list[PhotoItem] = []
     for it in items:
+        has_gps_change = it.has_pending_gps or it.pending.strip_gps
+        has_format_change = convert_mismatched or it.is_png or it.has_format_mismatch or ".heic." in it.display_name.lower()
+        has_rename = do_rename and (not smart_undated_only or not it.has_date_in_name)
+        if has_gps_change or has_format_change or has_rename:
+            actionable_items.append(it)
+
+    total = len(actionable_items)
+    if total == 0:
+        log.info("apply_changes_batch: No actionable items to process.")
+        return all_warnings
+
+    log.info(
+        "apply_changes_batch starting for %d actionable items out of %d passed (norm_dates=%s, do_rename=%s, smart_undated=%s, append_orig=%s)",
+        total, len(items), normalize_dates, do_rename, smart_undated_only, append_original
+    )
+
+    # Ensure actionable items have date_taken populated from file mtime before EXIF write touches timestamps
+    for it in actionable_items:
         if not it.date_taken:
             try:
                 mtime = it.display_path.stat().st_mtime
@@ -1064,7 +1079,7 @@ def apply_changes_batch(
 
     # ── Phase 0: Backup pristine original files to directory mirror ──────────
     all_physical_files = []
-    for it in items:
+    for it in actionable_items:
         all_physical_files.extend(it.all_paths)
 
     if progress_callback:
@@ -1082,7 +1097,7 @@ def apply_changes_batch(
         all_warnings.append(msg)
 
     # ── Phase 0.5: Convert format-mismatched files & PNGs to clean JPEG ──────
-    for item in items:
+    for item in actionable_items:
         if convert_mismatched or item.is_png or item.has_format_mismatch or ".heic." in item.display_name.lower():
             if progress_callback:
                 try:
@@ -1094,7 +1109,7 @@ def apply_changes_batch(
     # ── Phase 1: EXIF / Video QuickTime writes ────────────────────────────────
     try:
         with _et_writer() as et:
-            for n, item in enumerate(items, 1):
+            for n, item in enumerate(actionable_items, 1):
                 if progress_callback:
                     desc = "📍 Writing QuickTime / Video GPS..." if item.is_video else "📍 Writing EXIF / Photo GPS..."
                     if item.pending.strip_gps:
@@ -1117,8 +1132,8 @@ def apply_changes_batch(
 
     # ── Phase 2: Renames (with Smart Undated-Only option) ──────────────────────
     if do_rename:
-        log.info("Renaming %d photo item groups (smart_undated_only=%s)...", len(items), smart_undated_only)
-        for n, item in enumerate(items, 1):
+        log.info("Renaming %d photo item groups (smart_undated_only=%s)...", len(actionable_items), smart_undated_only)
+        for n, item in enumerate(actionable_items, 1):
             if progress_callback:
                 try:
                     progress_callback(n, total, item.display_name, "🏷️ Renaming file...")
