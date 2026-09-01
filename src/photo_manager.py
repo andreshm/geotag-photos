@@ -831,6 +831,54 @@ def _repair_jpeg_metadata(path: Path) -> bool:
         return fixed_eoi
 
 
+def _repair_truncated_mp4(path: Path) -> bool:
+    """Scan MP4/MOV top-level atoms and truncate unclosed/garbage trailing bytes (e.g. Truncated atom errors)."""
+    try:
+        size = path.stat().st_size
+        if size < 16:
+            return False
+
+        with open(path, "rb") as f:
+            pos = 0
+            last_valid_end = 0
+            while pos + 8 <= size:
+                f.seek(pos)
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    break
+                box_len = int.from_bytes(hdr[:4], "big")
+                box_type = hdr[4:8]
+
+                if box_len == 0:
+                    last_valid_end = size
+                    break
+                elif box_len == 1:
+                    ext_hdr = f.read(8)
+                    if len(ext_hdr) < 8:
+                        break
+                    box_len = int.from_bytes(ext_hdr, "big")
+
+                if box_len < 8 or pos + box_len > size:
+                    # Truncated box header or trailing incomplete bytes
+                    break
+
+                pos += box_len
+                last_valid_end = pos
+
+            if 0 < last_valid_end < size:
+                log.info(
+                    "Truncated atom detected on '%s' (%d bytes of trailing garbage). Truncating to %d valid bytes...",
+                    path.name, size - last_valid_end, last_valid_end
+                )
+                with open(path, "r+b") as fw:
+                    fw.seek(last_valid_end)
+                    fw.truncate()
+                return True
+    except Exception as exc:
+        log.warning("MP4 atom repair failed on '%s': %s", path.name, exc)
+    return False
+
+
 def _write_exif_for_item(
     item: PhotoItem,
     et: exiftool.ExifToolHelper,
@@ -868,11 +916,17 @@ def _write_exif_for_item(
                 except Exception:
                     pass
 
-            # Attempt metadata repair on corrupted JPEG
-            if _repair_jpeg_metadata(path):
+            # Attempt self-healing repair based on format
+            repaired = False
+            if path.suffix.lower() in VIDEO_EXTENSIONS or _detect_format_ext(path) in _VIDEO_FORMATS:
+                repaired = _repair_truncated_mp4(path)
+            else:
+                repaired = _repair_jpeg_metadata(path)
+
+            if repaired:
                 try:
                     et.set_tags([p_str], tags)
-                    log.info("✓ ExifTool successfully updated tags on '%s' after metadata repair!", path.name)
+                    log.info("✓ ExifTool successfully updated tags on '%s' after container repair!", path.name)
                     written_ok = True
                 except Exception as retry_exc:
                     err_details = f"After repair retry failed: {retry_exc}"
