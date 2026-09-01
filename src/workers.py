@@ -204,6 +204,10 @@ class SaveWorker(QObject):
         self._smart_undated_only = smart_undated_only
         self._convert_mismatched = convert_mismatched
         self._backup_service = backup_service or BackupService()
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         try:
@@ -216,6 +220,7 @@ class SaveWorker(QObject):
                 convert_mismatched=self._convert_mismatched,
                 backup_service=self._backup_service,
                 progress_callback=lambda n, t, fn="", st="": self.progress.emit(n, t, fn, st),
+                is_cancelled=lambda: self._cancelled,
             )
             self.done.emit(warnings)
         except Exception as exc:
@@ -254,3 +259,6 @@ class SaveThread(QThread):
 
     def run(self):
         self._worker.run()
+
+    def cancel(self):
+        self._worker.cancel()

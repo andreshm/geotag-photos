@@ -1001,6 +1001,7 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(True)
 
         self._save_dialog = SaveProgressDialog(len(to_save), self)
+        self._save_dialog.cancel_requested.connect(self._on_save_cancel_requested)
         self._save_dialog.show()
 
         self._save_thread = SaveThread(
@@ -1017,6 +1018,12 @@ class MainWindow(QMainWindow):
         self._save_thread.done.connect(self._on_save_done)
         self._save_thread.error.connect(self._on_save_error)
         self._save_thread.start()
+
+    def _on_save_cancel_requested(self):
+        log.info("User clicked Stop Process in progress dialog. Signaling SaveThread...")
+        if self._save_thread and self._save_thread.isRunning():
+            self._save_thread.cancel()
+            self._status("⚠️ Stopping process after current file completes...")
 
     @Slot(int, int, str, str)
     def _on_save_progress(self, n: int, total: int, filename: str = "", stage: str = ""):
@@ -1035,6 +1042,19 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(False)
         self._set_busy(False)
         self._refresh_stat_cards()
+
+        was_stopped = any("stopped by user" in str(w).lower() for w in warnings)
+        if was_stopped:
+            self._status("⚠️ Save process stopped by user.")
+            QMessageBox.information(
+                self, "Save Stopped",
+                "<b>Save process was safely stopped.</b><br><br>"
+                "The active file completed its write to preserve integrity.<br>"
+                "Remaining items retain their staged changes for future saving."
+            )
+            self._grid.refresh_all()
+            self._refresh_stat_cards()
+            return
 
         # Clear session recovery state now that changes are permanently saved
         session_manager.clear_folder_state(self._current_folders or self._current_folder)

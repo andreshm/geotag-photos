@@ -1,23 +1,25 @@
-"""save_progress_dialog.py — Cyber-Dark modal progress dialog showing live file-by-file saving status."""
+"""save_progress_dialog.py — Cyber-Dark modal progress dialog showing live file-by-file saving status with graceful stop support."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar,
-    QFrame, QWidget
+    QFrame, QWidget, QPushButton
 )
 from resources.theme import Colors, STYLE_MODERN_CYBER
 
 
 class SaveProgressDialog(QDialog):
-    """Modal progress dialog preventing user interaction until batch writes finish completely."""
+    """Modal progress dialog preventing unsafe interaction while allowing graceful cancellation after the current file."""
+
+    cancel_requested = Signal()
 
     def __init__(self, total_items: int, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Applying Changes & Backing Up")
-        self.setFixedSize(540, 240)
+        self.setFixedSize(560, 260)
         self.setStyleSheet(STYLE_MODERN_CYBER)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         # Disable close button during write
@@ -25,11 +27,12 @@ class SaveProgressDialog(QDialog):
 
         self._total = max(1, total_items)
         self._current = 0
+        self._stopping = False
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(24, 20, 24, 18)
         layout.setSpacing(12)
 
         # Header Title & Icon
@@ -95,10 +98,53 @@ class SaveProgressDialog(QDialog):
 
         layout.addWidget(info_frame)
 
-        # Footer Hint
-        lbl_hint = QLabel("💡 Please wait while changes are safely written to disk and verified.", self)
-        lbl_hint.setStyleSheet(f"font-size: 10px; color: {Colors.TEXT_MUTED}; font-style: italic;")
-        layout.addWidget(lbl_hint)
+        # Footer Action Row (Hint + Stop Process Button)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+
+        self._lbl_hint = QLabel("💡 Changes are written safely item-by-item to preserve integrity.", self)
+        self._lbl_hint.setStyleSheet(f"font-size: 10px; color: {Colors.TEXT_MUTED}; font-style: italic;")
+        footer.addWidget(self._lbl_hint, stretch=1)
+
+        self._btn_stop = QPushButton("🛑 Stop Process", self)
+        self._btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_stop.setToolTip("Finish current file write safely and stop remaining items without corrupting data")
+        self._btn_stop.setStyleSheet(f"""
+            QPushButton {{
+                background: #230d12;
+                border: 1px solid {Colors.ROSE};
+                border-radius: 6px;
+                color: {Colors.ROSE_LIGHT};
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 14px;
+                min-height: 24px;
+            }}
+            QPushButton:hover {{
+                background: #3b141d;
+                border-color: #fb7185;
+                color: #ffffff;
+            }}
+            QPushButton:disabled {{
+                background: #18181b;
+                border-color: {Colors.BORDER_DEFAULT};
+                color: {Colors.TEXT_MUTED};
+            }}
+        """)
+        self._btn_stop.clicked.connect(self._on_stop_clicked)
+        footer.addWidget(self._btn_stop)
+
+        layout.addLayout(footer)
+
+    def _on_stop_clicked(self):
+        if self._stopping:
+            return
+        self._stopping = True
+        self._btn_stop.setEnabled(False)
+        self._btn_stop.setText("⏳ Stopping safely...")
+        self._lbl_stage.setText("⚠️ Stopping after current file finishes writing to preserve integrity...")
+        self._lbl_subtitle.setText("Finishing current single file write to preserve file integrity...")
+        self.cancel_requested.emit()
 
     def update_progress(self, current: int, total: int, filename: str = "", stage: str = ""):
         self._current = current
@@ -107,9 +153,10 @@ class SaveProgressDialog(QDialog):
         self._progress.setValue(current)
 
         pct = int((current / total) * 100) if total > 0 else 0
-        self._lbl_subtitle.setText(f"Processing item {current} of {total} ({pct}%)")
+        if not self._stopping:
+            self._lbl_subtitle.setText(f"Processing item {current} of {total} ({pct}%)")
 
-        if stage:
+        if stage and not self._stopping:
             self._lbl_stage.setText(stage)
         if filename:
             self._lbl_file.setText(f"📄 {filename}")

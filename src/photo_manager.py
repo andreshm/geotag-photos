@@ -1044,6 +1044,7 @@ def apply_changes_batch(
     convert_mismatched: bool = False,
     backup_service: Optional[BackupService] = None,
     progress_callback=None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> list[str]:
     """Write GPS + dates for modified *items* (Photos & Videos) after backing up original files."""
     all_warnings: list[str] = []
@@ -1098,6 +1099,9 @@ def apply_changes_batch(
 
     # ── Phase 0.5: Convert format-mismatched files & PNGs to clean JPEG ──────
     for item in actionable_items:
+        if is_cancelled and is_cancelled():
+            log.info("Cancel requested. Gracefully stopping PNG conversions.")
+            break
         if convert_mismatched or item.is_png or item.has_format_mismatch or ".heic." in item.display_name.lower():
             if progress_callback:
                 try:
@@ -1110,6 +1114,11 @@ def apply_changes_batch(
     try:
         with _et_writer() as et:
             for n, item in enumerate(actionable_items, 1):
+                if is_cancelled and is_cancelled():
+                    log.info("Cancel requested. Gracefully stopping batch write after current file finishes.")
+                    all_warnings.append(f"Save process was stopped by user after {n-1} of {total} item(s).")
+                    break
+
                 if progress_callback:
                     desc = "📍 Writing QuickTime / Video GPS..." if item.is_video else "📍 Writing EXIF / Photo GPS..."
                     if item.pending.strip_gps:
@@ -1134,6 +1143,9 @@ def apply_changes_batch(
     if do_rename:
         log.info("Renaming %d photo item groups (smart_undated_only=%s)...", len(actionable_items), smart_undated_only)
         for n, item in enumerate(actionable_items, 1):
+            if is_cancelled and is_cancelled():
+                log.info("Cancel requested. Stopping file renaming.")
+                break
             if progress_callback:
                 try:
                     progress_callback(n, total, item.display_name, "🏷️ Renaming file...")
