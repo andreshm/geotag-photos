@@ -1,15 +1,21 @@
 @echo off
+setlocal enabledelayedexpansion
+
 echo ============================================================
-echo  GeoTag Photos — Build standalone EXE (PyInstaller)
+echo  GeoTag Studio PRO — Build Standalone Portable Package
 echo ============================================================
 echo.
 
 call .venv\Scripts\activate.bat
 
-pip install pyinstaller
+python -m pip install --upgrade pyinstaller
 
-pyinstaller ^
-  --name "GeoTag Photos" ^
+echo.
+echo Building portable distribution (Device-Guard safe via python module)...
+python -m PyInstaller ^
+  --name "GeoTagStudioPRO" ^
+  --noconfirm ^
+  --clean ^
   --onedir ^
   --windowed ^
   --icon NONE ^
@@ -21,9 +27,23 @@ pyinstaller ^
   --hidden-import "exiftool" ^
   main.py
 
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Build failed. Check the error messages above.
+    pause
+    exit /b 1
+)
+
+if exist exiftool.exe (
+    if not exist "dist\GeoTagStudioPRO" mkdir "dist\GeoTagStudioPRO"
+    echo Copying exiftool.exe into dist\GeoTagStudioPRO\...
+    copy /y exiftool.exe "dist\GeoTagStudioPRO\" >nul
+)
+
 echo.
 echo ============================================================
-echo  Build complete!  Output: dist\GeoTag Photos\
-echo  Copy exiftool.exe into dist\GeoTag Photos\ before shipping.
+echo  Build complete!
+echo  Portable output folder: dist\GeoTagStudioPRO\
 echo ============================================================
+echo.
 pause

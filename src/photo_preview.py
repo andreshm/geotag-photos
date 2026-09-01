@@ -1,32 +1,37 @@
-"""photo_preview.py — Compact info bar shown below the map when a photo is selected."""
+"""photo_preview.py — Modern cyber-dark photo inspector and EXIF metadata panel."""
 
 from __future__ import annotations
 
 import os
 import logging
+import subprocess
+import webbrowser
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPixmap, QColor, QPainter, QFont, QPen
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QBrush, QFontMetrics
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QPushButton, QFrame, QSizePolicy,
+    QPushButton, QFrame, QSizePolicy, QApplication,
+    QGridLayout,
 )
 
+from resources.theme import Colors, STYLE_MODERN_CYBER
 from .photo_item import PhotoItem
+from .photo_manager import reverse_geocode
 
 log = logging.getLogger(__name__)
 
-PREVIEW_H = 130    # fixed height of the bar
+PREVIEW_H = 150
 
 
 class _ThumbFrame(QWidget):
-    """Draws the thumbnail with a subtle border, sized to PREVIEW_H."""
+    """Draws the thumbnail preview with subtle rounded border."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap: Optional[QPixmap] = None
-        self.setFixedSize(PREVIEW_H - 10, PREVIEW_H - 10)
+        self.setFixedSize(PREVIEW_H - 12, PREVIEW_H - 12)
 
     def set_pixmap(self, px: Optional[QPixmap]):
         self._pixmap = px
@@ -37,38 +42,32 @@ class _ThumbFrame(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect()
 
-        painter.fillRect(r, QColor("#0d1117"))
-        painter.setPen(QPen(QColor("#2d3748"), 1))
-        painter.drawRect(r.adjusted(0, 0, -1, -1))
+        painter.setBrush(QBrush(QColor("#070c18")))
+        painter.setPen(QPen(QColor(Colors.BORDER_CARD), 1))
+        painter.drawRoundedRect(r.adjusted(1, 1, -1, -1), 6, 6)
 
         if self._pixmap:
             scaled = self._pixmap.scaled(
-                r.width() - 4, r.height() - 4,
+                r.width() - 6, r.height() - 6,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            x = r.x() + (r.width()  - scaled.width())  // 2
+            x = r.x() + (r.width() - scaled.width()) // 2
             y = r.y() + (r.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
         else:
-            painter.setPen(QColor("#4a5568"))
-            painter.setFont(QFont("Segoe UI", 20))
+            painter.setPen(QColor(Colors.TEXT_MUTED))
+            painter.setFont(QFont("Segoe UI", 24))
             painter.drawText(r, Qt.AlignmentFlag.AlignCenter, "📷")
 
         painter.end()
 
 
 class PhotoInfoBar(QFrame):
-    """A slim horizontal panel showing the selected photo's info.
+    """A sleek cyber-dark panel showing the selected photo's detailed EXIF metadata and actions."""
 
-    Signals
-    -------
-    open_requested  — user clicked "Open" button (open with default app)
-    locate_requested — user clicked "Locate" button (reveal in Explorer)
-    """
-
-    open_requested    = Signal(object)   # PhotoItem
-    locate_requested  = Signal(object)   # PhotoItem
+    open_requested   = Signal(object)   # PhotoItem
+    locate_requested = Signal(object)   # PhotoItem
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,144 +75,207 @@ class PhotoInfoBar(QFrame):
 
         self.setFixedHeight(PREVIEW_H)
         self.setStyleSheet(
-            "PhotoInfoBar { background: #0d1117; border-top: 1px solid #2d3748; }"
+            f"PhotoInfoBar {{ background: {Colors.BG_PANEL}; border-top: 1px solid {Colors.BORDER_DEFAULT}; }}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(14)
 
         # ── Thumbnail ─────────────────────────────────────────────────────────
         self._thumb = _ThumbFrame(self)
         layout.addWidget(self._thumb)
 
-        # ── Info block ────────────────────────────────────────────────────────
-        info = QVBoxLayout()
-        info.setSpacing(2)
+        # ── Metadata Grid ─────────────────────────────────────────────────────
+        meta_layout = QVBoxLayout()
+        meta_layout.setSpacing(2)
+
+        # Title Row: Name + Type Badge + Size
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
 
         self._lbl_name = QLabel("", self)
-        self._lbl_name.setStyleSheet(
-            "color:#e2e8f0; font-size:13px; font-weight:bold;"
-        )
-        self._lbl_name.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        info.addWidget(self._lbl_name)
+        self._lbl_name.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 13px; font-weight: bold;")
+        self._lbl_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._lbl_name.setMaximumWidth(420)
+        title_row.addWidget(self._lbl_name, stretch=1)
 
-        self._lbl_type = QLabel("", self)
-        self._lbl_type.setStyleSheet("color:#7c3aed; font-size:11px;")
-        info.addWidget(self._lbl_type)
+        self._lbl_badge = QLabel("", self)
+        self._lbl_badge.setStyleSheet(
+            f"background: #082f49; color: {Colors.CYAN_LIGHT}; border: 1px solid {Colors.CYAN}; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+        )
+        title_row.addWidget(self._lbl_badge)
 
+        self._lbl_size = QLabel("", self)
+        self._lbl_size.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px;")
+        title_row.addWidget(self._lbl_size)
+
+        title_row.addStretch()
+        meta_layout.addLayout(title_row)
+
+        # 2-column info grid
+        info_grid = QGridLayout()
+        info_grid.setSpacing(3)
+        info_grid.setContentsMargins(0, 2, 0, 2)
+
+        # Row 0: Camera / Exposure
+        self._lbl_camera = QLabel("", self)
+        self._lbl_camera.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        info_grid.addWidget(self._lbl_camera, 0, 0)
+
+        self._lbl_exposure = QLabel("", self)
+        self._lbl_exposure.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        info_grid.addWidget(self._lbl_exposure, 0, 1)
+
+        # Row 1: Date / Dimensions
         self._lbl_date = QLabel("", self)
-        self._lbl_date.setStyleSheet("color:#94a3b8; font-size:11px;")
-        info.addWidget(self._lbl_date)
+        self._lbl_date.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        info_grid.addWidget(self._lbl_date, 1, 0)
 
+        self._lbl_dim = QLabel("", self)
+        self._lbl_dim.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px;")
+        info_grid.addWidget(self._lbl_dim, 1, 1)
+
+        # Row 2: GPS coordinates
         self._lbl_gps = QLabel("", self)
-        self._lbl_gps.setStyleSheet("color:#f59e0b; font-size:11px;")
-        info.addWidget(self._lbl_gps)
+        self._lbl_gps.setStyleSheet(f"color: {Colors.EMERALD_LIGHT}; font-size: 11px; font-family: Consolas;")
+        info_grid.addWidget(self._lbl_gps, 2, 0, 1, 2)
 
-        self._lbl_folder = QLabel("", self)
-        self._lbl_folder.setStyleSheet("color:#4a5568; font-size:10px;")
-        self._lbl_folder.setWordWrap(False)
-        info.addWidget(self._lbl_folder)
+        # Row 3: Address Line
+        self._lbl_addr = QLabel("", self)
+        self._lbl_addr.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px;")
+        self._lbl_addr.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._lbl_addr.setMaximumWidth(420)
+        self._lbl_addr.setWordWrap(False)
+        info_grid.addWidget(self._lbl_addr, 3, 0, 1, 2)
 
-        info.addStretch()
-        layout.addLayout(info, stretch=1)
+        meta_layout.addLayout(info_grid)
+        layout.addLayout(meta_layout, stretch=1)
 
-        # ── Buttons ───────────────────────────────────────────────────────────
+        # ── Action Buttons Column ─────────────────────────────────────────────
         btn_col = QVBoxLayout()
-        btn_col.setSpacing(6)
+        btn_col.setSpacing(4)
 
-        self._btn_open = QPushButton("▶  Open", self)
-        self._btn_open.setToolTip("Open with default application")
-        self._btn_open.setFixedWidth(90)
-        self._btn_open.setStyleSheet(
-            "QPushButton { background:#1e3a5f; color:#93c5fd; border:1px solid #1e40af;"
-            " border-radius:4px; padding:5px; font-size:11px; }"
-            "QPushButton:hover { background:#1e40af; }"
-        )
+        self._btn_open = QPushButton("▶  Open Image", self)
+        self._btn_open.setFixedWidth(110)
         self._btn_open.clicked.connect(self._on_open)
         btn_col.addWidget(self._btn_open)
 
-        self._btn_locate = QPushButton("📁  Locate", self)
-        self._btn_locate.setToolTip("Show in Windows Explorer")
-        self._btn_locate.setFixedWidth(90)
-        self._btn_locate.setStyleSheet(
-            "QPushButton { background:#1c3325; color:#6ee7b7; border:1px solid #065f46;"
-            " border-radius:4px; padding:5px; font-size:11px; }"
-            "QPushButton:hover { background:#065f46; }"
-        )
+        self._btn_locate = QPushButton("📁  In Explorer", self)
+        self._btn_locate.setFixedWidth(110)
         self._btn_locate.clicked.connect(self._on_locate)
         btn_col.addWidget(self._btn_locate)
 
-        btn_col.addStretch()
-        layout.addLayout(btn_col)
+        self._btn_gmaps = QPushButton("🌐  Google Maps", self)
+        self._btn_gmaps.setFixedWidth(110)
+        self._btn_gmaps.clicked.connect(self._on_open_gmaps)
+        btn_col.addWidget(self._btn_gmaps)
 
-        # Start hidden — shown when a photo is selected
+        layout.addLayout(btn_col)
         self.setVisible(False)
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def set_item(self, item: Optional[PhotoItem]):
-        """Update the bar for *item*. Pass None to hide."""
         self._item = item
-
         if item is None:
             self.setVisible(False)
             return
 
-        # Thumbnail
         self._thumb.set_pixmap(item.thumbnail)
+        fm = QFontMetrics(self._lbl_name.font())
+        elided_name = fm.elidedText(item.display_name, Qt.TextElideMode.ElideMiddle, 380)
+        self._lbl_name.setText(elided_name)
+        self._lbl_name.setToolTip(item.display_name)
+        self._lbl_size.setText(item.formatted_size)
 
-        # Name
-        self._lbl_name.setText(item.display_name)
-
-        # Type badge
-        if item.is_pair:
-            self._lbl_type.setText(
-                f"RAW+JPEG  ·  {item.raw_path.suffix.upper()[1:]} + "   # type: ignore[union-attr]
-                f"{item.jpeg_path.suffix.upper()[1:]}"                   # type: ignore[union-attr]
+        # Type badge & Open button text
+        if item.is_video:
+            self._lbl_badge.setText(f"🎬 {item.video_format_str}")
+            self._lbl_badge.setStyleSheet(
+                f"background: #1e1b4b; color: {Colors.CYAN_LIGHT}; border: 1px solid {Colors.CYAN}; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
             )
+            self._btn_open.setText("▶  Open Video")
+        elif item.is_pair:
+            self._lbl_badge.setText("RAW + JPEG")
+            self._lbl_badge.setStyleSheet(
+                f"background: #1e0b36; color: {Colors.PURPLE_LIGHT}; border: 1px solid {Colors.PURPLE}; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+            self._btn_open.setText("▶  Open Image")
         elif item.raw_path:
-            self._lbl_type.setText(f"RAW  ·  {item.raw_path.suffix.upper()[1:]}")
-        elif item.jpeg_path:
-            self._lbl_type.setText(f"JPEG")
+            self._lbl_badge.setText(item.raw_path.suffix.upper().lstrip("."))
+            self._lbl_badge.setStyleSheet(
+                f"background: #1e0b36; color: {Colors.PURPLE_LIGHT}; border: 1px solid {Colors.PURPLE}; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+            self._btn_open.setText("▶  Open Image")
         else:
-            self._lbl_type.setText(item.display_path.suffix.upper()[1:])
+            self._lbl_badge.setText(item.display_path.suffix.upper().lstrip("."))
+            self._lbl_badge.setStyleSheet(
+                f"background: #082f49; color: {Colors.CYAN_LIGHT}; border: 1px solid {Colors.CYAN}; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+            self._btn_open.setText("▶  Open Image")
 
-        # Date
+        # Camera & Exposure
+        icon = "🎬" if item.is_video else "📷"
+        self._lbl_camera.setText(f"{icon}  {item.camera_str}")
+        self._lbl_exposure.setText(f"⚙️  {item.exposure_str}")
+
+        # Date & Dimensions
         self._lbl_date.setText(f"📅  {item.date_str()}")
+        dim_str = item.dimensions_str
+        self._lbl_dim.setText(f"📐  {dim_str}" if dim_str else "")
 
-        # GPS
+        # GPS status & Address
         g = item.effective_gps
-        if item.pending.gps:
+        if item.pending.strip_gps:
+            self._lbl_gps.setText("🗑️ STAGED FOR REMOVAL (GPS will be deleted from file)")
+            self._lbl_gps.setStyleSheet(f"color: {Colors.ROSE_LIGHT}; font-size: 11px; font-weight: bold;")
+            self._lbl_addr.setText("Coordinates will be erased upon saving")
+            self._btn_gmaps.setEnabled(False)
+        elif item.pending.gps:
             gps = item.pending.gps
-            self._lbl_gps.setText(f"⏳  {gps[0]:.6f},  {gps[1]:.6f}  (pending — not saved)")
-            self._lbl_gps.setStyleSheet("color:#f59e0b; font-size:11px;")
+            self._lbl_gps.setText(f"⏳ STAGED: {gps[0]:.6f}, {gps[1]:.6f}")
+            self._lbl_gps.setStyleSheet(f"color: {Colors.AMBER_LIGHT}; font-size: 11px; font-family: Consolas; font-weight: bold;")
+            self._btn_gmaps.setEnabled(True)
+            self._update_address(gps[0], gps[1])
         elif g:
-            self._lbl_gps.setText(f"📍  {g[0]:.6f},  {g[1]:.6f}")
-            self._lbl_gps.setStyleSheet("color:#22c55e; font-size:11px;")
+            self._lbl_gps.setText(f"📍 GPS: {g[0]:.6f}, {g[1]:.6f}")
+            self._lbl_gps.setStyleSheet(f"color: {Colors.EMERALD_LIGHT}; font-size: 11px; font-family: Consolas; font-weight: bold;")
+            self._btn_gmaps.setEnabled(True)
+            self._update_address(g[0], g[1])
         else:
-            self._lbl_gps.setText("❌  No GPS data")
-            self._lbl_gps.setStyleSheet("color:#ef4444; font-size:11px;")
-
-        # Folder (relative if possible)
-        folder = str(item.folder)
-        self._lbl_folder.setText(f"📂  {folder}")
-        self._lbl_folder.setToolTip(folder)
+            self._lbl_gps.setText("❌ No GPS metadata")
+            self._lbl_gps.setStyleSheet(f"color: {Colors.ROSE_LIGHT}; font-size: 11px;")
+            self._lbl_addr.setText("")
+            self._btn_gmaps.setEnabled(False)
 
         self.setVisible(True)
 
+    def _update_address(self, lat: float, lon: float):
+        self._lbl_addr.setText("🏢 Resolving address…")
+        # Async-like singleShot to prevent GUI blocking
+        QTimer.singleShot(50, lambda: self._fetch_address(lat, lon))
+
+    def _fetch_address(self, lat: float, lon: float):
+        if self._item and self._item.effective_gps:
+            g = self._item.effective_gps
+            if abs(g[0] - lat) < 1e-4 and abs(g[1] - lon) < 1e-4:
+                addr = reverse_geocode(lat, lon)
+                if addr:
+                    self._lbl_addr.setText(f"🏢 {addr}")
+                    self._lbl_addr.setToolTip(addr)
+                else:
+                    self._lbl_addr.setText("")
+
     def refresh(self):
-        """Refresh labels for the current item (e.g. after thumbnail loads)."""
         self.set_item(self._item)
 
-    # ── private ───────────────────────────────────────────────────────────────
+    # ── Actions ───────────────────────────────────────────────────────────────
 
     def _on_open(self):
         if self._item:
             try:
-                os.startfile(str(self._item.display_path))   # Windows only
+                os.startfile(str(self._item.display_path))
             except Exception as exc:
                 log.warning("startfile failed: %s", exc)
             self.open_requested.emit(self._item)
@@ -221,3 +283,9 @@ class PhotoInfoBar(QFrame):
     def _on_locate(self):
         if self._item:
             self.locate_requested.emit(self._item)
+
+    def _on_open_gmaps(self):
+        if self._item and self._item.effective_gps:
+            lat, lon = self._item.effective_gps
+            url = f"https://www.google.com/maps?q={lat:.6f},{lon:.6f}"
+            webbrowser.open(url)

@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>GeoTag Map</title>
+<title>GeoTag Studio Map</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
 <!-- Leaflet core -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-<!-- Leaflet Control Geocoder (Nominatim search) -->
+<!-- Leaflet Control Geocoder -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder@2.4.0/dist/Control.Geocoder.css" />
 <script src="https://unpkg.com/leaflet-control-geocoder@2.4.0/dist/Control.Geocoder.js"></script>
 
@@ -18,35 +18,102 @@
 
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: #1e1e1e; }
-  #map { width: 100%; height: 100%; }
+  html, body { width: 100%; height: 100%; background: #070b14; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #map { width: 100%; height: 100%; background: #070b14; }
 
-  /* Pending-GPS marker pulse */
-  .marker-pending {
-    width: 14px; height: 14px;
-    border-radius: 50%;
-    background: #f59e0b;
-    border: 2px solid #fff;
-    box-shadow: 0 0 6px #f59e0b;
+  /* Cyber Dark Theme Geocoder */
+  .leaflet-control-geocoder {
+    background: #0f172a !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
+    min-width: 280px;
   }
-  /* Existing GPS marker */
-  .marker-existing {
-    width: 10px; height: 10px;
-    border-radius: 50%;
-    background: #3b82f6;
-    border: 2px solid #fff;
-    opacity: 0.7;
+  .leaflet-control-geocoder input {
+    background: #0b1222 !important;
+    color: #f8fafc !important;
+    font-size: 12px !important;
+    padding: 6px 10px !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 6px !important;
+    outline: none !important;
+    width: 100% !important;
   }
-  /* Crosshair cursor when picking mode is active */
-  .picking #map { cursor: crosshair; }
+  .leaflet-control-geocoder input:focus {
+    border-color: #06b6d4 !important;
+    box-shadow: 0 0 8px rgba(6, 182, 212, 0.3) !important;
+  }
+  .leaflet-control-geocoder-alternatives {
+    background: #0f172a !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 6px !important;
+  }
+  .leaflet-control-geocoder-alternatives li a {
+    color: #94a3b8 !important;
+    font-size: 11px !important;
+    padding: 6px 8px !important;
+  }
+  .leaflet-control-geocoder-alternatives li a:hover,
+  .leaflet-control-geocoder-selected {
+    background: #082f49 !important;
+    color: #67e8f9 !important;
+  }
 
-  /* Custom geocoder styling */
-  .leaflet-control-geocoder { min-width: 280px; }
-  .leaflet-control-geocoder-form input {
-    font-size: 14px;
-    padding: 6px 10px;
-    width: 100%;
-    border-radius: 4px;
+  /* Layer control */
+  .leaflet-control-layers {
+    background: #0f172a !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 8px !important;
+    color: #94a3b8 !important;
+    font-size: 11px !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+  }
+  .leaflet-control-layers-expanded {
+    padding: 8px 12px !important;
+  }
+
+  /* Zoom buttons */
+  .leaflet-bar a {
+    background: #0f172a !important;
+    color: #94a3b8 !important;
+    border-bottom: 1px solid #1e293b !important;
+  }
+  .leaflet-bar a:hover {
+    background: #1e293b !important;
+    color: #06b6d4 !important;
+  }
+
+  /* Popups */
+  .leaflet-popup-content-wrapper {
+    background: #0f172a !important;
+    color: #f8fafc !important;
+    border: 1px solid #06b6d4 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 0 15px rgba(6, 182, 212, 0.35) !important;
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+  }
+  .leaflet-popup-tip {
+    background: #0f172a !important;
+  }
+
+  /* Inverted Cyber Dark OpenStreetMap filter */
+  .cyber-dark-tiles {
+    filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7) !important;
+  }
+
+  /* Picker Pin Animation */
+  @keyframes pin-pulse {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
+    70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+  }
+  .picker-pin {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #f59e0b; border: 3px solid #ffffff;
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+    cursor: grab;
+    animation: pin-pulse 2s infinite;
   }
 </style>
 </head>
@@ -54,66 +121,115 @@
 <div id="map"></div>
 
 <script>
-// ──────────────────────────────────────────────────────────────────────────
-// State
-// ──────────────────────────────────────────────────────────────────────────
 let map, pyBridge;
-let pickerMarker = null;      // Orange "selected location" marker
-let photoMarkers = [];        // Blue dots for existing GPS photos
+let pickerMarker = null;
+let photoMarkersLayer = null;
 
-// ──────────────────────────────────────────────────────────────────────────
-// Init map
-// ──────────────────────────────────────────────────────────────────────────
 function initMap() {
-  map = L.map('map', {
-    center: [20, 0],
-    zoom: 2,
-    zoomControl: true,
+  // 1. Cyber Dark Canvas (Esri World Dark Gray Base + Labels Reference) - 100% Free & No API Key
+  const esriDarkBase = L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '© <a href="https://www.esri.com/">Esri</a>, HERE, Garmin, © OpenStreetMap',
+    maxZoom: 16
+  });
+  const esriDarkRef = L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 16
+  });
+  const darkCanvas = L.layerGroup([esriDarkBase, esriDarkRef]);
+
+  // 2. OpenStreetMap Cyber Dark (Filtered)
+  const osmDark = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    className: 'cyber-dark-tiles',
+    maxZoom: 19
   });
 
-  // OpenStreetMap tiles — completely free, no key needed
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  // 3. OpenStreetMap Standard Streets
+  const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19,
-  }).addTo(map);
+    maxZoom: 19
+  });
 
-  // ── Geocoder (Nominatim) ────────────────────────────────────────────────
+  // 4. Esri Satellite Imagery + Hybrid Labels
+  const satImagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '© Esri & Contributors',
+    maxZoom: 19
+  });
+  const satLabels = L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19
+  });
+  const satelliteHybrid = L.layerGroup([satImagery, satLabels]);
+
+  // 5. Esri World Topo Map
+  const topo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '© Esri, USGS, FAO, NPS',
+    maxZoom: 19
+  });
+
+  map = L.map('map', {
+    center: [25, 0],
+    zoom: 2,
+    layers: [darkCanvas],
+    zoomControl: true
+  });
+
+  const baseMaps = {
+    "Cyber Dark (Esri)": darkCanvas,
+    "Cyber Dark (OSM)": osmDark,
+    "Standard Streets (OSM)": osm,
+    "Satellite Hybrid (Esri)": satelliteHybrid,
+    "Topographic (Esri)": topo
+  };
+
+  L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
+
+  photoMarkersLayer = L.layerGroup().addTo(map);
+
+  // Nominatim Search Geocoder
   const geocoder = L.Control.geocoder({
     defaultMarkGeocode: false,
     geocoder: L.Control.Geocoder.nominatim({
-      geocodingQueryParams: { limit: 8 }
+      geocodingQueryParams: { limit: 6 }
     }),
-    placeholder: 'Search address, landmark, business…',
-    errorMessage: 'Nothing found.',
+    placeholder: '🔍 Search city, address, landmark…',
     position: 'topleft',
-    collapsed: false,
+    collapsed: false
   })
   .on('markgeocode', function(e) {
     const { center, name } = e.geocode;
-    map.setView(center, 16);
+    map.setView(center, 15);
     placePickerAt(center.lat, center.lng, name);
   })
   .addTo(map);
 
-  // ── Click on map to pick location ──────────────────────────────────────
+  // Click on map to drop pin
   map.on('click', function(e) {
     placePickerAt(e.latlng.lat, e.latlng.lng, null);
   });
 
-  // ── QWebChannel bridge ─────────────────────────────────────────────────
+  // Setup QWebChannel
   if (typeof qt !== 'undefined') {
     new QWebChannel(qt.webChannelTransport, function(channel) {
       pyBridge = channel.objects.pyBridge;
-      console.log('[map] QWebChannel connected');
+      console.log('[map] QWebChannel connected successfully');
     });
-  } else {
-    console.warn('[map] Running outside Qt — bridge unavailable');
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Place / move the orange picker marker
-// ──────────────────────────────────────────────────────────────────────────
+function reverseGeocode(lat, lng, callback) {
+  fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
+    headers: { 'Accept-Language': 'en, *' }
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data && data.display_name) {
+      callback(data.display_name);
+    } else {
+      callback(null);
+    }
+  })
+  .catch(() => callback(null));
+}
+
 function placePickerAt(lat, lng, label) {
   if (pickerMarker) {
     pickerMarker.setLatLng([lat, lng]);
@@ -121,81 +237,122 @@ function placePickerAt(lat, lng, label) {
     pickerMarker = L.marker([lat, lng], {
       icon: L.divIcon({
         className: '',
-        html: `<div style="
-          width:22px;height:22px;border-radius:50%;
-          background:#f59e0b;border:3px solid #fff;
-          box-shadow:0 2px 8px rgba(0,0,0,.5);
-          cursor:grab;
-        "></div>`,
+        html: '<div class="picker-pin"></div>',
         iconSize: [22, 22],
-        iconAnchor: [11, 11],
+        iconAnchor: [11, 11]
       }),
       draggable: true,
-      title: 'Selected location — drag to adjust',
+      title: 'Target Location — drag to fine tune'
     }).addTo(map);
 
     pickerMarker.on('dragend', function() {
       const ll = pickerMarker.getLatLng();
-      notifyPython(ll.lat, ll.lng, null);
+      placePickerAt(ll.lat, ll.lng, null);
     });
   }
 
-  const displayLabel = label || `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-  pickerMarker.bindPopup(`<b>📍 Selected location</b><br>${displayLabel}`, { closeButton: false })
-              .openPopup();
+  const coordStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
 
-  notifyPython(lat, lng, label);
+  if (label && label.length > 0) {
+    const displayLabel = `
+      <div style="min-width:200px;">
+        <div style="font-weight:bold;font-size:12px;color:#f8fafc;margin-bottom:2px;">📍 Target Location</div>
+        <div style="color:#67e8f9;font-family:Consolas,monospace;font-size:11px;margin-bottom:4px;">${coordStr}</div>
+        <div style="color:#94a3b8;font-size:11px;line-height:1.35;border-top:1px solid #1e293b;padding-top:4px;">🏢 ${label}</div>
+      </div>
+    `;
+    pickerMarker.bindPopup(displayLabel, { closeButton: false }).openPopup();
+    notifyPython(lat, lng, label);
+  } else {
+    const initialLabel = `
+      <div style="min-width:180px;">
+        <div style="font-weight:bold;font-size:12px;color:#f8fafc;margin-bottom:2px;">📍 Target Location</div>
+        <div style="color:#67e8f9;font-family:Consolas,monospace;font-size:11px;margin-bottom:4px;">${coordStr}</div>
+        <div style="color:#64748b;font-size:10px;font-style:italic;">🔍 Resolving address…</div>
+      </div>
+    `;
+    pickerMarker.bindPopup(initialLabel, { closeButton: false }).openPopup();
+    notifyPython(lat, lng, '');
+
+    reverseGeocode(lat, lng, function(addr) {
+      if (addr && pickerMarker) {
+        const fullLabel = `
+          <div style="min-width:200px;">
+            <div style="font-weight:bold;font-size:12px;color:#f8fafc;margin-bottom:2px;">📍 Target Location</div>
+            <div style="color:#67e8f9;font-family:Consolas,monospace;font-size:11px;margin-bottom:4px;">${coordStr}</div>
+            <div style="color:#94a3b8;font-size:11px;line-height:1.35;border-top:1px solid #1e293b;padding-top:4px;">🏢 ${addr}</div>
+          </div>
+        `;
+        pickerMarker.bindPopup(fullLabel, { closeButton: false }).openPopup();
+        notifyPython(lat, lng, addr);
+      }
+    });
+  }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Send selected coordinates to Python
-// ──────────────────────────────────────────────────────────────────────────
 function notifyPython(lat, lng, label) {
   if (pyBridge) {
     pyBridge.locationSelected(lat, lng, label || '');
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Called FROM Python — add/refresh photo markers on the map
-// ──────────────────────────────────────────────────────────────────────────
-function setPhotoMarkers(markersJson) {
-  // markersJson: [{lat, lon, label}]
-  photoMarkers.forEach(m => map.removeLayer(m));
-  photoMarkers = [];
+function setPhotoMarkersData(items) {
+  if (!photoMarkersLayer) return;
+  photoMarkersLayer.clearLayers();
 
-  const data = JSON.parse(markersJson);
-  data.forEach(item => {
+  if (!items || !items.length) return;
+
+  items.forEach(item => {
+    const isPending = !!item.isPending;
+    const color = isPending ? '#f59e0b' : '#06b6d4';
+    const fillColor = isPending ? '#f59e0b' : '#3b82f6';
+
     const m = L.circleMarker([item.lat, item.lon], {
-      radius: 5,
-      color: '#3b82f6',
-      fillColor: '#3b82f6',
-      fillOpacity: 0.7,
-      weight: 1.5,
-    }).bindTooltip(item.label, { direction: 'top', offset: [0, -6] })
-      .addTo(map);
-    photoMarkers.push(m);
+      radius: isPending ? 7 : 5,
+      color: color,
+      fillColor: fillColor,
+      fillOpacity: 0.85,
+      weight: 2
+    });
+
+    const badge = isPending ? '<span style="color:#f59e0b;font-weight:bold;">● STAGED</span>'
+                            : '<span style="color:#10b981;font-weight:bold;">✓ GEOTAGGED</span>';
+
+    const addrLine = item.address ? `<div style="color:#94a3b8;font-size:10px;line-height:1.3;margin-top:2px;">🏢 ${item.address}</div>` : '';
+
+    const popupHtml = `
+      <div style="min-width:160px;">
+        <div style="font-weight:bold;font-size:12px;color:#f8fafc;margin-bottom:2px;">${item.label}</div>
+        <div style="font-size:10px;margin-bottom:3px;">${badge}</div>
+        <div style="font-family:Consolas,monospace;font-size:10px;color:#67e8f9;">${item.lat.toFixed(6)}, ${item.lon.toFixed(6)}</div>
+        ${addrLine}
+      </div>
+    `;
+
+    m.bindPopup(popupHtml);
+    m.bindTooltip(item.label, { direction: 'top', offset: [0, -6] });
+
+    m.on('click', function() {
+      if (pyBridge && pyBridge.photoMarkerClicked) {
+        pyBridge.photoMarkerClicked(item.path || item.label, item.lat, item.lon);
+      }
+    });
+
+    photoMarkersLayer.addLayer(m);
   });
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Called FROM Python — pan/zoom map to coordinates
-// ──────────────────────────────────────────────────────────────────────────
 function flyTo(lat, lng, zoom) {
-  map.flyTo([lat, lng], zoom || 14, { animate: true, duration: 1.0 });
+  const z = zoom || 16;
+  map.flyTo([lat, lng], z, { animate: true, duration: 1.0 });
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Called FROM Python — place picker at a specific coordinate (programmatic)
-// ──────────────────────────────────────────────────────────────────────────
-function setPicker(lat, lng) {
+function setPicker(lat, lng, zoom) {
   placePickerAt(lat, lng, null);
-  map.setView([lat, lng], Math.max(map.getZoom(), 14));
+  const z = zoom || Math.max(map.getZoom(), 15);
+  map.flyTo([lat, lng], z, { animate: true, duration: 0.8 });
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Called FROM Python — clear the picker marker
-// ──────────────────────────────────────────────────────────────────────────
 function clearPicker() {
   if (pickerMarker) {
     map.removeLayer(pickerMarker);
@@ -203,9 +360,6 @@ function clearPicker() {
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Bootstrap
-// ──────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', initMap);
 </script>
 </body>

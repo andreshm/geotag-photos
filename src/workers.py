@@ -1,15 +1,19 @@
-"""workers.py — QThread-based background workers to keep the UI responsive."""
+"""workers.py — QThread-based background workers with multi-threaded thumbnail rendering, video support, and smart rename."""
 
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QThread, Signal, QObject
+from PySide6.QtGui import QImage
 
 from .photo_item import PhotoItem
-from .photo_manager import scan_folder, load_metadata, generate_thumbnail, apply_changes_batch
+from .photo_manager import scan_folder, load_metadata, generate_thumbnail_image, apply_changes_batch
+from .backup_manager import BackupService
 
 log = logging.getLogger(__name__)
 
@@ -19,26 +23,31 @@ log = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ScanWorker(QObject):
-    """Scans a folder, reads metadata, emits items in batches."""
+    """Scans folder(s) in single pass, loads EXIF/video metadata in batches, emits discovered items."""
 
-    # Emitted with each discovered PhotoItem (no thumbnail yet)
-    item_ready   = Signal(object)          # PhotoItem
-    # Emitted when scan is fully done
-    scan_done    = Signal(int)             # total item count
-    # Emitted on error
-    error        = Signal(str)
+    item_ready = Signal(object)      # PhotoItem
+    scan_done  = Signal(int)         # total count
+    error      = Signal(str)
 
-    def __init__(self, folder: Path, parent=None):
+    def __init__(self, folders: list[Path] | Path, parent=None):
         super().__init__(parent)
-        self._folder = folder
+        if isinstance(folders, Path):
+            self._folders = [folders]
+        else:
+            self._folders = list(folders)
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def run(self):
+        items = []
         try:
-            items = scan_folder(self._folder)
+            for f in self._folders:
+                if self._cancelled:
+                    return
+                f_items = scan_folder(f)
+                items.extend(f_items)
         except Exception as exc:
             self.error.emit(str(exc))
             return
@@ -46,7 +55,17 @@ class ScanWorker(QObject):
         if self._cancelled:
             return
 
-        # Read metadata in batches of 50 for responsiveness
+        # Deduplicate logical items if paths overlap
+        seen_paths = set()
+        unique_items = []
+        for it in items:
+            key = str(it.display_path.resolve())
+            if key not in seen_paths:
+                seen_paths.add(key)
+                unique_items.append(it)
+        items = unique_items
+
+        # Load EXIF and Video metadata in chunks of 50
         BATCH = 50
         for start in range(0, len(items), BATCH):
             if self._cancelled:
@@ -55,7 +74,8 @@ class ScanWorker(QObject):
             try:
                 load_metadata(batch)
             except Exception as exc:
-                log.warning("Metadata batch failed: %s", exc)
+                log.warning("Metadata chunk failed: %s", exc)
+
             for item in batch:
                 if self._cancelled:
                     return
@@ -69,9 +89,9 @@ class ScanThread(QThread):
     scan_done  = Signal(int)
     error      = Signal(str)
 
-    def __init__(self, folder: Path, parent=None):
+    def __init__(self, folders: list[Path] | Path, parent=None):
         super().__init__(parent)
-        self._worker = ScanWorker(folder)
+        self._worker = ScanWorker(folders)
         self._worker.item_ready.connect(self.item_ready)
         self._worker.scan_done.connect(self.scan_done)
         self._worker.error.connect(self.error)
@@ -84,14 +104,14 @@ class ScanThread(QThread):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Thumbnail loader worker
+# Multi-Threaded Thumbnail Loader Worker
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ThumbnailWorker(QObject):
-    """Generates thumbnails for a queue of PhotoItems."""
+    """Multi-threaded thumbnail generation using ThreadPoolExecutor and thread-safe QImage."""
 
-    thumbnail_ready = Signal(object)   # PhotoItem (thumbnail populated)
-    all_done        = Signal()
+    thumbnail_image_ready = Signal(object, object)   # (PhotoItem, QImage)
+    all_done              = Signal()
 
     def __init__(self, items: list[PhotoItem], parent=None):
         super().__init__(parent)
@@ -101,27 +121,50 @@ class ThumbnailWorker(QObject):
     def cancel(self):
         self._cancelled = True
 
+    def _process_item(self, item: PhotoItem) -> tuple[PhotoItem, Optional[QImage]]:
+        if self._cancelled:
+            return item, None
+        try:
+            img = generate_thumbnail_image(item)
+            return item, img
+        except Exception as exc:
+            log.warning("Thumb error %s: %s", item.display_name, exc)
+            return item, None
+
     def run(self):
-        for item in self._items:
-            if self._cancelled:
-                break
-            if item.thumbnail is None:
+        items_to_process = [i for i in self._items if i.thumbnail is None]
+        if not items_to_process:
+            self.all_done.emit()
+            return
+
+        max_workers = min(8, max(2, os.cpu_count() or 4))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_item = {
+                executor.submit(self._process_item, item): item
+                for item in items_to_process
+            }
+
+            for future in as_completed(future_to_item):
+                if self._cancelled:
+                    break
                 try:
-                    item.thumbnail = generate_thumbnail(item)
+                    item, qimg = future.result()
+                    if qimg:
+                        self.thumbnail_image_ready.emit(item, qimg)
                 except Exception as exc:
-                    log.warning("Thumb error %s: %s", item.display_name, exc)
-            self.thumbnail_ready.emit(item)
+                    log.warning("Thumbnail future failed: %s", exc)
+
         self.all_done.emit()
 
 
 class ThumbnailThread(QThread):
-    thumbnail_ready = Signal(object)
-    all_done        = Signal()
+    thumbnail_image_ready = Signal(object, object)   # (PhotoItem, QImage)
+    all_done              = Signal()
 
     def __init__(self, items: list[PhotoItem], parent=None):
         super().__init__(parent)
         self._worker = ThumbnailWorker(items)
-        self._worker.thumbnail_ready.connect(self.thumbnail_ready)
+        self._worker.thumbnail_image_ready.connect(self.thumbnail_image_ready)
         self._worker.all_done.connect(self.all_done)
 
     def run(self):
@@ -132,14 +175,14 @@ class ThumbnailThread(QThread):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Save / apply-changes worker
+# Save / Apply Changes Worker (with Backup Engine, Format Conversion & Smart Rename)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class SaveWorker(QObject):
-    """Applies pending changes (GPS write, date normalise, rename) in bg."""
+    """Backs up files, converts mismatched formats, and writes EXIF/GPS/Date changes in background."""
 
-    progress = Signal(int, int)    # (current, total)
-    done     = Signal(list)        # list[str] — warnings
+    progress = Signal(int, int, str, str)    # (current, total, filename, stage)
+    done     = Signal(list)                  # list[str] warnings
     error    = Signal(str)
 
     def __init__(
@@ -148,7 +191,9 @@ class SaveWorker(QObject):
         normalize_dates: bool,
         do_rename: bool,
         append_original: bool,
-        copy_to_gpsok: bool = False,
+        smart_undated_only: bool = False,
+        convert_mismatched: bool = False,
+        backup_service: Optional[BackupService] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -156,7 +201,9 @@ class SaveWorker(QObject):
         self._normalize_dates = normalize_dates
         self._do_rename = do_rename
         self._append_original = append_original
-        self._copy_to_gpsok = copy_to_gpsok
+        self._smart_undated_only = smart_undated_only
+        self._convert_mismatched = convert_mismatched
+        self._backup_service = backup_service or BackupService()
 
     def run(self):
         try:
@@ -165,8 +212,10 @@ class SaveWorker(QObject):
                 normalize_dates=self._normalize_dates,
                 do_rename=self._do_rename,
                 append_original=self._append_original,
-                copy_to_gpsok=self._copy_to_gpsok,
-                progress_callback=lambda n, t: self.progress.emit(n, t),
+                smart_undated_only=self._smart_undated_only,
+                convert_mismatched=self._convert_mismatched,
+                backup_service=self._backup_service,
+                progress_callback=lambda n, t, fn="", st="": self.progress.emit(n, t, fn, st),
             )
             self.done.emit(warnings)
         except Exception as exc:
@@ -174,7 +223,7 @@ class SaveWorker(QObject):
 
 
 class SaveThread(QThread):
-    progress = Signal(int, int)
+    progress = Signal(int, int, str, str)
     done     = Signal(list)
     error    = Signal(str)
 
@@ -184,12 +233,20 @@ class SaveThread(QThread):
         normalize_dates: bool,
         do_rename: bool,
         append_original: bool,
-        copy_to_gpsok: bool = False,
+        smart_undated_only: bool = False,
+        convert_mismatched: bool = False,
+        backup_service: Optional[BackupService] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._worker = SaveWorker(
-            items, normalize_dates, do_rename, append_original, copy_to_gpsok
+            items,
+            normalize_dates,
+            do_rename,
+            append_original,
+            smart_undated_only,
+            convert_mismatched,
+            backup_service
         )
         self._worker.progress.connect(self.progress)
         self._worker.done.connect(self.done)

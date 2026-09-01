@@ -14,30 +14,37 @@ build/
 venv/
 env/
 
-# PyInstaller output
-dist/
-build/
-
-# Logs
+# Logs & debug traces
 *.log
+*.log.*
+geotag_debug*
 
-# OS
+# Temporary & Cache directories
+.cache/
+.tmp*
+.tmp.driveupload/
+test_sample*
+scratch/
+.user_uploaded/
+
+# Backups directory (local runtime backups)
+backups/
+
+# OS artifacts
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDE
+# IDE & Editor files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Claude Code internal settings (tool-specific, not part of the project)
 .claude/
 
-# ExifTool backup files (should never appear with -overwrite_original)
-*_original
-
-# ExifTool binary (download separately from https://exiftool.org)
+# ExifTool binary & backups
 exiftool.exe
 exiftool
+*_original
+*.7z
+*.zip
