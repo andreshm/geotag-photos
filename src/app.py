@@ -906,16 +906,20 @@ class MainWindow(QMainWindow):
 
         selected = self._grid.selected_items()
         pending_items = [i for i in self._all_items if i.has_pending_gps]
+        mismatched_items = [
+            i for i in self._all_items
+            if i.is_png or i.has_format_mismatch or ".heic." in i.display_name.lower()
+        ]
 
-        if pending_items:
-            # When there are staged GPS / strip changes, save ALL staged items
-            if do_rename or norm_dates:
-                to_save = self._all_items
-            else:
-                to_save = pending_items
-        elif selected and (do_rename or norm_dates):
+        if pending_items or mismatched_items:
+            # Save strictly modified items (staged GPS, GPS erasure, or format conversion)
+            to_save_set = set(pending_items) | set(mismatched_items)
+            if do_rename and selected and len(selected) > 1:
+                to_save_set.update(selected)
+            to_save = [i for i in self._all_items if i in to_save_set]
+        elif selected and do_rename:
             to_save = selected
-        elif (do_rename or norm_dates) and self._all_items:
+        elif do_rename and self._all_items:
             to_save = self._all_items
         else:
             QMessageBox.information(

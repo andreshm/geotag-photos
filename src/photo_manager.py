@@ -777,10 +777,35 @@ def _tags_for_path(
     return tags
 
 
+def _fix_missing_jpeg_eoi(path: Path) -> bool:
+    """If a JPEG file lacks the End Of Image marker (0xFF 0xD9) due to Samsung SEF trailer or camera truncation, append it."""
+    try:
+        if path.suffix.lower() not in JPEG_EXTENSIONS:
+            return False
+        size = path.stat().st_size
+        if size < 4:
+            return False
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 128))
+            tail = f.read()
+        if b"\xff\xd9" not in tail:
+            log.info("Missing JPEG EOI marker (0xFF 0xD9) detected on '%s'. Appending EOI marker to fix ExifTool write compatibility...", path.name)
+            with open(path, "ab") as f:
+                f.write(b"\xff\xd9")
+            return True
+    except Exception as exc:
+        log.warning("Failed checking/appending EOI marker on '%s': %s", path.name, exc)
+    return False
+
+
 def _repair_jpeg_metadata(path: Path) -> bool:
-    """Rebuild corrupt EXIF/IFD structure (e.g. OtherImageStart data errors) using ExifTool clean rebuild."""
+    """Rebuild corrupt EXIF/IFD structure (e.g. OtherImageStart data errors or missing EOI) using ExifTool clean rebuild."""
     if not EXIFTOOL_PATH or path.suffix.lower() not in JPEG_EXTENSIONS:
         return False
+
+    # 1. First ensure JPEG has a valid End Of Image marker
+    fixed_eoi = _fix_missing_jpeg_eoi(path)
+
     try:
         log.info("Attempting ExifTool metadata structure rebuild on corrupt file '%s'...", path.name)
         cmd = [
@@ -799,10 +824,11 @@ def _repair_jpeg_metadata(path: Path) -> bool:
             log.info("Successfully rebuilt metadata structure on '%s'", path.name)
             return True
         else:
-            log.warning("ExifTool rebuild failed on '%s': %s", path.name, res.stderr)
+            log.warning("ExifTool rebuild output on '%s': %s (fixed_eoi=%s)", path.name, res.stderr.strip(), fixed_eoi)
+            return fixed_eoi
     except Exception as exc:
         log.warning("Metadata repair exception on '%s': %s", path.name, exc)
-    return False
+        return fixed_eoi
 
 
 def _write_exif_for_item(
