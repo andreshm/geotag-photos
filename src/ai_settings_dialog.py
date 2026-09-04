@@ -305,7 +305,7 @@ class AISettingsDialog(QDialog):
 
     def _check_vision_model_compatibility(self, model_name: str):
         name = (model_name or "").lower().strip()
-        vision_keywords = ["vision", "llava", "minicpm", "vl", "bakllava", "moondream", "gemma3"]
+        vision_keywords = ["vision", "llava", "minicpm", "vl", "bakllava", "moondream", "gemma3", "qwen3.5", "qwen3.6", "qwen2.5-vl", "qwen2-vl", "qwen-vl"]
         is_vision = any(k in name for k in vision_keywords)
         
         if not name:
@@ -315,10 +315,9 @@ class AISettingsDialog(QDialog):
             self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #34d399;")
         else:
             self._lbl_model_hint.setText(
-                f"⚠️ Note: '{model_name}' appears to be a text-only model. "
-                f"For image geocoding, please use vision models like 'llama3.2-vision', 'llava', or 'minicpm-v'."
+                f"ℹ️ Model: '{model_name}'. Ensure this model variant has vision/multimodal support."
             )
-            self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #fbbf24;")
+            self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #38bdf8;")
 
     def _refresh_ollama_models(self):
         url = self._txt_ollama_url.text().strip() or "http://localhost:11434"

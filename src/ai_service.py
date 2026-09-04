@@ -229,22 +229,26 @@ class AIService:
         model: str = "llama3.2-vision",
         timeout: int = 120,
     ) -> AIPredictionResult:
-        """Sends image and prompt to local Ollama vision model."""
-        url = server_url.rstrip("/") + "/api/generate"
-        payload = {
+        """Sends image and prompt to local Ollama vision model using the modern /api/chat endpoint."""
+        url_chat = server_url.rstrip("/") + "/api/chat"
+        payload_chat = {
             "model": model,
-            "prompt": prompt,
-            "images": [image_b64],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_b64],
+                }
+            ],
             "stream": False,
-            "format": "json",
             "options": {
                 "temperature": 0.2,
             },
         }
 
-        data_bytes = json.dumps(payload).encode("utf-8")
+        data_bytes = json.dumps(payload_chat).encode("utf-8")
         req = urllib.request.Request(
-            url,
+            url_chat,
             data=data_bytes,
             headers={"Content-Type": "application/json", "User-Agent": "GeoTagStudioPRO/2.0"},
             method="POST",
@@ -253,21 +257,26 @@ class AIService:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 res_json = json.loads(resp.read().decode("utf-8"))
-                response_text = res_json.get("response", "").strip()
+                response_text = res_json.get("message", {}).get("content", "").strip()
 
-            # If response was empty with format="json", retry once without format constraint
+            # If /api/chat was empty, fallback to /api/generate
             if not response_text:
-                payload.pop("format", None)
-                data_bytes = json.dumps(payload).encode("utf-8")
-                req = urllib.request.Request(
-                    url,
-                    data=data_bytes,
+                url_gen = server_url.rstrip("/") + "/api/generate"
+                payload_gen = {
+                    "model": model,
+                    "prompt": prompt,
+                    "images": [image_b64],
+                    "stream": False,
+                }
+                req_gen = urllib.request.Request(
+                    url_gen,
+                    data=json.dumps(payload_gen).encode("utf-8"),
                     headers={"Content-Type": "application/json", "User-Agent": "GeoTagStudioPRO/2.0"},
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    res_json = json.loads(resp.read().decode("utf-8"))
-                    response_text = res_json.get("response", "").strip()
+                with urllib.request.urlopen(req_gen, timeout=timeout) as resp_gen:
+                    res_gen = json.loads(resp_gen.read().decode("utf-8"))
+                    response_text = res_gen.get("response", "").strip()
 
             return cls.parse_json_response(response_text, "Ollama (Local)", model)
         except urllib.error.URLError as exc:
