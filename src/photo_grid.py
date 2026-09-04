@@ -105,6 +105,7 @@ class PhotoCell(QFrame):
     clear_gps_req    = Signal(object)
     strip_gps_req    = Signal(object)
     show_in_explorer = Signal(object)
+    ai_guess_req     = Signal(object)
 
     def __init__(self, item: PhotoItem, card_w: int = 180, card_h: int = 215, parent=None):
         super().__init__(parent)
@@ -347,10 +348,10 @@ class PhotoCell(QFrame):
         menu = QMenu(self)
         menu.setStyleSheet(STYLE_MODERN_CYBER)
 
-        hdr = menu.addAction(f"📍  {item.gps_str()}")
-        hdr.setEnabled(False)
-        menu.addSeparator()
+        act_ai = menu.addAction("🤖  Ask AI to Guess Location...")
+        act_ai.triggered.connect(lambda: self.ai_guess_req.emit(item))
 
+        menu.addSeparator()
         act_clear = menu.addAction("✕  Clear staged GPS")
         act_clear.setEnabled(item.pending.gps is not None or item.pending.strip_gps)
         act_clear.triggered.connect(lambda: self.clear_gps_req.emit(item))
@@ -475,6 +476,7 @@ class PhotoGrid(QWidget):
     clear_gps_req     = Signal(object)
     strip_gps_req     = Signal(object)
     show_in_explorer  = Signal(object)
+    ai_guess_req      = Signal(object)
     status_message    = Signal(str)
 
     def __init__(self, parent=None):
@@ -835,6 +837,7 @@ class PhotoGrid(QWidget):
         cell.clear_gps_req.connect(self.clear_gps_req)
         cell.strip_gps_req.connect(self.strip_gps_req)
         cell.show_in_explorer.connect(self.show_in_explorer)
+        cell.ai_guess_req.connect(self.ai_guess_req)
         self._cells.append(cell)
         self._item_to_cell[item] = cell
 

@@ -31,6 +31,8 @@ from .thumbnail_cache import thumbnail_cache
 from .session_manager import session_manager
 from .folder_dialog import MultiFolderDialog
 from .save_progress_dialog import SaveProgressDialog
+from .ai_settings_dialog import AISettingsDialog
+from .ai_guesser_dialog import AIGuesserDialog
 
 log = logging.getLogger(__name__)
 
@@ -199,6 +201,12 @@ class MainWindow(QMainWindow):
         self._btn_backups.clicked.connect(self._open_backup_manager)
         hl.addWidget(self._btn_backups)
 
+        # ── AI Configuration Button ──────────────────────────────────────────
+        self._btn_ai_cfg = QPushButton("🤖  AI Config", header_widget)
+        self._btn_ai_cfg.setToolTip("Configure Vision AI Models (Ollama / Gemini / OpenAI) for Location Prediction")
+        self._btn_ai_cfg.clicked.connect(self._open_ai_config)
+        hl.addWidget(self._btn_ai_cfg)
+
         # ── Auto-tag CTA ─────────────────────────────────────────────────────
         self._btn_hdr_auto = QPushButton("⚡  Auto-tag", header_widget)
         self._btn_hdr_auto.setObjectName("btn_action_emerald")
@@ -296,6 +304,7 @@ class MainWindow(QMainWindow):
         self._grid.clear_gps_req.connect(self._clear_pending_gps_item)
         self._grid.strip_gps_req.connect(self._strip_gps_item)
         self._grid.show_in_explorer.connect(self._show_in_explorer)
+        self._grid.ai_guess_req.connect(self._open_ai_guesser)
         self._grid.status_message.connect(self._status)
         self._splitter_h.addWidget(self._grid)
 
@@ -312,6 +321,7 @@ class MainWindow(QMainWindow):
 
         self._info_bar = PhotoInfoBar(right)
         self._info_bar.locate_requested.connect(self._show_in_explorer)
+        self._info_bar.ai_guess_requested.connect(self._open_ai_guesser)
         right_layout.addWidget(self._info_bar)
 
         right_layout.addWidget(self._build_action_panel(right))
@@ -1197,6 +1207,72 @@ class MainWindow(QMainWindow):
             w.setEnabled(not busy)
         if not busy:
             self._update_action_states()
+
+    # =========================================================================
+    # AI Vision Geolocation Predictor Helpers
+    # =========================================================================
+
+    def _open_ai_config(self):
+        """Opens AI Model and API Provider Configuration Dialog."""
+        dlg = AISettingsDialog(self)
+        dlg.exec()
+
+    def _get_same_day_gps_anchors(self, target_item: PhotoItem) -> list[dict]:
+        """Collects verified GPS coordinates of all photos/videos taken on the exact same calendar day."""
+        if not target_item.date_taken:
+            return []
+        target_date = target_item.date_taken.date()
+        anchors = []
+        for item in self._all_items:
+            if item is target_item:
+                continue
+            if not item.date_taken or item.date_taken.date() != target_date:
+                continue
+            gps = item.effective_gps
+            if gps:
+                time_str = item.date_taken.strftime("%H:%M:%S")
+                anchors.append({
+                    "lat": gps[0],
+                    "lon": gps[1],
+                    "time": time_str,
+                    "name": item.display_name,
+                })
+        # Sort chronologically by time
+        anchors.sort(key=lambda x: x["time"])
+        return anchors
+
+    def _open_ai_guesser(self, item: Optional[PhotoItem] = None):
+        """Opens the AI Location Guesser dialog for the selected or activated photo."""
+        target = item
+        if not target:
+            selected = self._grid.selected_items()
+            if selected:
+                target = selected[0]
+
+        if not target:
+            QMessageBox.information(
+                self, "No Photo Selected",
+                "Please select a photo in the gallery to guess its location with AI."
+            )
+            return
+
+        anchors = self._get_same_day_gps_anchors(target)
+        dlg = AIGuesserDialog(target, anchors, self)
+        dlg.preview_on_map.connect(lambda lat, lon: self._map.set_center_and_pin(lat, lon, zoom=16))
+        dlg.apply_gps.connect(self._on_ai_apply_gps)
+        dlg.exec()
+
+    def _on_ai_apply_gps(self, item: PhotoItem, lat: float, lon: float):
+        """Applies AI-predicted GPS coordinates to the photo item."""
+        item.pending.gps = (lat, lon)
+        item.pending.strip_gps = False
+        self._grid.refresh_cell(item)
+        self._refresh_stat_cards()
+        self._map.set_center_and_pin(lat, lon, zoom=16)
+        self._lbl_gps.setText(f"AI Stage: {lat:.6f}, {lon:.6f}")
+        self._info_bar.refresh()
+        self._update_action_states()
+        self._status(f"✓ AI assigned GPS ({lat:.5f}, {lon:.5f}) to {item.display_name}")
 
     def _status(self, msg: str):
         self._lbl_status.setText(msg)

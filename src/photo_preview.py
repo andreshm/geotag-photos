@@ -66,8 +66,9 @@ class _ThumbFrame(QWidget):
 class PhotoInfoBar(QFrame):
     """A sleek cyber-dark panel showing the selected photo's detailed EXIF metadata and actions."""
 
-    open_requested   = Signal(object)   # PhotoItem
-    locate_requested = Signal(object)   # PhotoItem
+    open_requested     = Signal(object)   # PhotoItem
+    locate_requested   = Signal(object)   # PhotoItem
+    ai_guess_requested = Signal(object)   # PhotoItem
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -154,20 +155,42 @@ class PhotoInfoBar(QFrame):
 
         # ── Action Buttons Column ─────────────────────────────────────────────
         btn_col = QVBoxLayout()
-        btn_col.setSpacing(4)
+        btn_col.setSpacing(3)
+
+        self._btn_ai_guess = QPushButton("🤖  AI Guess", self)
+        self._btn_ai_guess.setFixedWidth(112)
+        self._btn_ai_guess.setToolTip("Ask Vision AI (Ollama / Gemini / OpenAI) to analyze landmarks and guess location")
+        self._btn_ai_guess.setStyleSheet(f"""
+            QPushButton {{
+                background: #2e1065;
+                border: 1px solid #9333ea;
+                color: #f3e8ff;
+                font-weight: bold;
+                font-size: 10.5px;
+                border-radius: 5px;
+                padding: 3px 6px;
+            }}
+            QPushButton:hover {{
+                background: #3b0764;
+                border-color: #c084fc;
+                color: #ffffff;
+            }}
+        """)
+        self._btn_ai_guess.clicked.connect(self._on_ai_guess)
+        btn_col.addWidget(self._btn_ai_guess)
 
         self._btn_open = QPushButton("▶  Open Image", self)
-        self._btn_open.setFixedWidth(110)
+        self._btn_open.setFixedWidth(112)
         self._btn_open.clicked.connect(self._on_open)
         btn_col.addWidget(self._btn_open)
 
         self._btn_locate = QPushButton("📁  In Explorer", self)
-        self._btn_locate.setFixedWidth(110)
+        self._btn_locate.setFixedWidth(112)
         self._btn_locate.clicked.connect(self._on_locate)
         btn_col.addWidget(self._btn_locate)
 
         self._btn_gmaps = QPushButton("🌐  Google Maps", self)
-        self._btn_gmaps.setFixedWidth(110)
+        self._btn_gmaps.setFixedWidth(112)
         self._btn_gmaps.clicked.connect(self._on_open_gmaps)
         btn_col.addWidget(self._btn_gmaps)
 
@@ -284,8 +307,13 @@ class PhotoInfoBar(QFrame):
         if self._item:
             self.locate_requested.emit(self._item)
 
+    def _on_ai_guess(self):
+        if self._item:
+            self.ai_guess_requested.emit(self._item)
+
     def _on_open_gmaps(self):
         if self._item and self._item.effective_gps:
             lat, lon = self._item.effective_gps
             url = f"https://www.google.com/maps?q={lat:.6f},{lon:.6f}"
             webbrowser.open(url)
+
