@@ -125,10 +125,16 @@ class AISettingsDialog(QDialog):
         lbl_omodel.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         self._combo_ollama_model = QComboBox(self._panel_ollama)
         self._combo_ollama_model.setEditable(True)
-        self._combo_ollama_model.addItems(["llama3.2-vision", "llama3.2-vision:11b", "llava", "llava:13b", "minicpm-v", "bakllava"])
+        self._combo_ollama_model.addItems(["llama3.2-vision", "llama3.2-vision:11b", "llava", "llava:13b", "minicpm-v", "qwen2.5-vl", "bakllava"])
+        self._combo_ollama_model.currentTextChanged.connect(self._check_vision_model_compatibility)
         row_omodel.addWidget(lbl_omodel)
         row_omodel.addWidget(self._combo_ollama_model, stretch=1)
         o_lay.addLayout(row_omodel)
+
+        self._lbl_model_hint = QLabel("", self._panel_ollama)
+        self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #fbbf24;")
+        self._lbl_model_hint.setWordWrap(True)
+        o_lay.addWidget(self._lbl_model_hint)
 
         self._lbl_ollama_status = QLabel("", self._panel_ollama)
         self._lbl_ollama_status.setStyleSheet("font-size: 11px; font-weight: bold;")
@@ -297,6 +303,23 @@ class AISettingsDialog(QDialog):
 
         self.accept()
 
+    def _check_vision_model_compatibility(self, model_name: str):
+        name = (model_name or "").lower().strip()
+        vision_keywords = ["vision", "llava", "minicpm", "vl", "bakllava", "moondream", "gemma3"]
+        is_vision = any(k in name for k in vision_keywords)
+        
+        if not name:
+            self._lbl_model_hint.setText("")
+        elif is_vision:
+            self._lbl_model_hint.setText("✓ Multimodal Vision model detected.")
+            self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #34d399;")
+        else:
+            self._lbl_model_hint.setText(
+                f"⚠️ Note: '{model_name}' appears to be a text-only model. "
+                f"For image geocoding, please use vision models like 'llama3.2-vision', 'llava', or 'minicpm-v'."
+            )
+            self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #fbbf24;")
+
     def _refresh_ollama_models(self):
         url = self._txt_ollama_url.text().strip() or "http://localhost:11434"
         try:
@@ -311,6 +334,7 @@ class AISettingsDialog(QDialog):
                     self._combo_ollama_model.setCurrentText(current)
                 self._lbl_ollama_status.setText(f"✓ Connected! Found {len(models)} model(s) installed.")
                 self._lbl_ollama_status.setStyleSheet(f"color: {Colors.EMERALD_LIGHT};")
+                self._check_vision_model_compatibility(self._combo_ollama_model.currentText())
             else:
                 self._lbl_ollama_status.setText("✓ Connected, but no models found. Run `ollama pull llama3.2-vision`")
                 self._lbl_ollama_status.setStyleSheet(f"color: {Colors.AMBER_LIGHT};")

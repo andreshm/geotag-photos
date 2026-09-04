@@ -120,40 +120,92 @@ class AIService:
     @classmethod
     def parse_json_response(cls, response_text: str, provider: str, model: str) -> AIPredictionResult:
         """Extracts and validates structured JSON prediction from LLM response text."""
-        cleaned = response_text.strip()
-        # Strip markdown code blocks if present
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-            cleaned = re.sub(r"\s*```$", "", cleaned)
+        raw = response_text.strip()
+        if not raw:
+            raise ValueError(
+                f"The model '{model}' returned an empty response.\n\n"
+                f"⚠️ Please ensure '{model}' is a Multimodal Vision model (such as llama3.2-vision, llava, minicpm-v, or qwen2.5-vl).\n"
+                f"Text-only models (like qwen2.5, llama3, or mistral) cannot see or process images."
+            )
 
-        # Look for JSON object substring
+        # 1. Strip thinking tags <think>...</think> if present (DeepSeek-R1 / Qwen reasoning models)
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+        # 2. Strip markdown code blocks
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        # 3. Try standard JSON extraction
         match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if match:
-            cleaned = match.group(0)
+            json_candidate = match.group(0)
+            try:
+                data = json.loads(json_candidate)
+                lat = float(data.get("latitude", 0.0))
+                lon = float(data.get("longitude", 0.0))
+                loc_name = str(data.get("location_name", "Unknown Location")).strip()
+                confidence = str(data.get("confidence", "medium")).lower().strip()
+                if confidence not in ("high", "medium", "low"):
+                    confidence = "medium"
+                reasoning = str(data.get("reasoning", "")).strip()
 
-        data = json.loads(cleaned)
+                if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and (lat != 0.0 or lon != 0.0):
+                    return AIPredictionResult(
+                        location_name=loc_name,
+                        latitude=lat,
+                        longitude=lon,
+                        confidence=confidence,
+                        reasoning=reasoning,
+                        provider_used=provider,
+                        model_used=model,
+                        raw_response=response_text,
+                    )
+            except Exception:
+                pass
 
-        loc_name = str(data.get("location_name", "Unknown Location")).strip()
-        lat = float(data.get("latitude", 0.0))
-        lon = float(data.get("longitude", 0.0))
-        confidence = str(data.get("confidence", "medium")).lower().strip()
-        if confidence not in ("high", "medium", "low"):
-            confidence = "medium"
-        reasoning = str(data.get("reasoning", "")).strip()
+        # 4. Fallback: Regex key extraction for malformed JSON or unescaped quotes
+        lat_m = re.search(r'["\']?latitude["\']?\s*:\s*([+-]?\d+(?:\.\d+)?)', cleaned, re.IGNORECASE)
+        lon_m = re.search(r'["\']?longitude["\']?\s*:\s*([+-]?\d+(?:\.\d+)?)', cleaned, re.IGNORECASE)
+        loc_m = re.search(r'["\']?location(?:_name)?["\']?\s*:\s*["\']([^"\']+)["\']', cleaned, re.IGNORECASE)
+        res_m = re.search(r'["\']?reasoning["\']?\s*:\s*["\']([^"\']+)["\']', cleaned, re.IGNORECASE)
 
-        # Validate coordinate ranges
-        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
-            raise ValueError(f"Invalid coordinates returned: ({lat}, {lon})")
+        if lat_m and lon_m:
+            lat = float(lat_m.group(1))
+            lon = float(lon_m.group(1))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                loc_name = loc_m.group(1).strip() if loc_m else "Predicted Location"
+                reasoning = res_m.group(1).strip() if res_m else cleaned[:400]
+                return AIPredictionResult(
+                    location_name=loc_name,
+                    latitude=lat,
+                    longitude=lon,
+                    confidence="medium",
+                    reasoning=reasoning,
+                    provider_used=provider,
+                    model_used=model,
+                    raw_response=response_text,
+                )
 
-        return AIPredictionResult(
-            location_name=loc_name,
-            latitude=lat,
-            longitude=lon,
-            confidence=confidence,
-            reasoning=reasoning,
-            provider_used=provider,
-            model_used=model,
-            raw_response=response_text,
+        # 5. Fallback: Raw Coordinate extraction (e.g. "43.7696, 11.2558")
+        coord_m = re.search(r'([+-]?\d{1,2}\.\d+)\s*,\s*([+-]?\d{1,3}\.\d+)', cleaned)
+        if coord_m:
+            lat = float(coord_m.group(1))
+            lon = float(coord_m.group(2))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return AIPredictionResult(
+                    location_name="Estimated Location",
+                    latitude=lat,
+                    longitude=lon,
+                    confidence="low",
+                    reasoning=cleaned[:400],
+                    provider_used=provider,
+                    model_used=model,
+                    raw_response=response_text,
+                )
+
+        raise ValueError(
+            f"Could not extract valid GPS coordinates from model response.\n\n"
+            f"Model Response:\n{raw[:300]}..."
         )
 
     # ── Provider 1: Local Ollama ──────────────────────────────────────────────
@@ -201,8 +253,23 @@ class AIService:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 res_json = json.loads(resp.read().decode("utf-8"))
-                response_text = res_json.get("response", "")
-                return cls.parse_json_response(response_text, "Ollama (Local)", model)
+                response_text = res_json.get("response", "").strip()
+
+            # If response was empty with format="json", retry once without format constraint
+            if not response_text:
+                payload.pop("format", None)
+                data_bytes = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=data_bytes,
+                    headers={"Content-Type": "application/json", "User-Agent": "GeoTagStudioPRO/2.0"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    res_json = json.loads(resp.read().decode("utf-8"))
+                    response_text = res_json.get("response", "").strip()
+
+            return cls.parse_json_response(response_text, "Ollama (Local)", model)
         except urllib.error.URLError as exc:
             raise ConnectionError(
                 f"Could not connect to Ollama at {server_url}. Ensure Ollama is running (`ollama serve`). Details: {exc}"
