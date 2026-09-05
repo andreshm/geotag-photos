@@ -520,6 +520,45 @@ class AIService:
     # ── Provider 3: OpenAI ────────────────────────────────────────────────────
 
     @classmethod
+    def fetch_openai_models(cls, api_key: str) -> list[str]:
+        """Fetches active supported chat/vision/reasoning models for the user's OpenAI API key."""
+        if not api_key or not api_key.strip():
+            return []
+        url = "https://api.openai.com/v1/models"
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key.strip()}",
+                    "User-Agent": "GeoTagStudioPRO/2.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                raw_models = [m.get("id", "") for m in data.get("data", [])]
+
+                valid_prefixes = ("gpt-4", "gpt-3.5", "o1", "o3", "chatgpt")
+                filtered = [
+                    m for m in raw_models
+                    if any(m.startswith(p) for p in valid_prefixes)
+                    and not any(x in m for x in ("audio", "realtime", "transcribe", "tts", "moderation", "instruct", "embedding"))
+                ]
+
+                # Priority order for key flagship models
+                priority = [
+                    "gpt-4o", "gpt-4o-mini", "gpt-4.5-preview", "chatgpt-4o-latest",
+                    "o1", "o3-mini", "o1-mini", "gpt-4-turbo", "gpt-4-vision-preview"
+                ]
+                ordered = [p for p in priority if p in filtered]
+                for m in sorted(filtered):
+                    if m not in ordered:
+                        ordered.append(m)
+                return ordered if ordered else ["gpt-4o", "gpt-4o-mini", "gpt-4.5-preview", "o1", "o3-mini", "gpt-4-turbo"]
+        except Exception as exc:
+            log.warning("Could not list OpenAI models: %s", exc)
+            return []
+
+    @classmethod
     def predict_with_openai(
         cls,
         image_b64: str,
@@ -528,7 +567,7 @@ class AIService:
         model: str = "gpt-4o-mini",
         timeout: int = 60,
     ) -> AIPredictionResult:
-        """Sends image and prompt to OpenAI GPT-4o Vision API."""
+        """Sends image and prompt to OpenAI Vision / Reasoning API."""
         if not api_key or not api_key.strip():
             raise ValueError("OpenAI API Key is missing. Configure it in ⚙️ AI Settings.")
 
@@ -550,8 +589,11 @@ class AIService:
                 }
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.2,
         }
+
+        # Temperature is not supported on o1/o3 reasoning models
+        if not (model.startswith("o1") or model.startswith("o3")):
+            payload["temperature"] = 0.2
 
         data_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -560,6 +602,7 @@ class AIService:
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key.strip()}",
+                "User-Agent": "GeoTagStudioPRO/2.0",
             },
             method="POST",
         )
@@ -577,6 +620,28 @@ class AIService:
             raise ConnectionError(f"OpenAI API Error ({exc.code}): {err_msg}")
 
     # ── Provider 4: DeepSeek ──────────────────────────────────────────────────
+
+    @classmethod
+    def fetch_deepseek_models(cls, api_key: str, server_url: str = "https://api.deepseek.com") -> list[str]:
+        """Fetches available models from DeepSeek API."""
+        if not api_key or not api_key.strip():
+            return ["deepseek-chat", "deepseek-reasoner"]
+        url = server_url.rstrip("/") + "/models"
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key.strip()}",
+                    "User-Agent": "GeoTagStudioPRO/2.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = [m.get("id", "") for m in data.get("data", [])]
+                return models if models else ["deepseek-chat", "deepseek-reasoner"]
+        except Exception as exc:
+            log.warning("Could not list DeepSeek models: %s", exc)
+            return ["deepseek-chat", "deepseek-reasoner"]
 
     @classmethod
     def predict_with_deepseek(
@@ -663,4 +728,5 @@ class AIService:
                 except Exception:
                     pass
             raise ConnectionError(f"DeepSeek API Error ({exc.code}): {err_msg}")
+
 

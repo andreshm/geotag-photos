@@ -233,9 +233,12 @@ class AISettingsDialog(QDialog):
         self._btn_openai_show = QPushButton("👁", self._panel_openai)
         self._btn_openai_show.setFixedWidth(30)
         self._btn_openai_show.clicked.connect(lambda: self._toggle_echo(self._txt_openai_key))
+        self._btn_test_openai = QPushButton("🔄 Refresh Models", self._panel_openai)
+        self._btn_test_openai.clicked.connect(self._refresh_openai_models)
         row_oakey.addWidget(lbl_oakey)
         row_oakey.addWidget(self._txt_openai_key, stretch=1)
         row_oakey.addWidget(self._btn_openai_show)
+        row_oakey.addWidget(self._btn_test_openai)
         oa_lay.addLayout(row_oakey)
 
         row_oamodel = QHBoxLayout()
@@ -243,10 +246,25 @@ class AISettingsDialog(QDialog):
         lbl_oamodel.setFixedWidth(80)
         lbl_oamodel.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         self._combo_openai_model = QComboBox(self._panel_openai)
-        self._combo_openai_model.addItems(["gpt-4o-mini", "gpt-4o"])
+        self._combo_openai_model.setEditable(True)
+        self._combo_openai_model.addItems([
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.5-preview",
+            "chatgpt-4o-latest",
+            "o1",
+            "o3-mini",
+            "o1-mini",
+            "gpt-4-turbo",
+            "gpt-4-vision-preview",
+        ])
         row_oamodel.addWidget(lbl_oamodel)
         row_oamodel.addWidget(self._combo_openai_model, stretch=1)
         oa_lay.addLayout(row_oamodel)
+
+        self._lbl_openai_status = QLabel("", self._panel_openai)
+        self._lbl_openai_status.setStyleSheet("font-size: 11px; font-weight: bold;")
+        oa_lay.addWidget(self._lbl_openai_status)
 
         btn_get_oakey = QPushButton("🔗 OpenAI API Platform Keys", self._panel_openai)
         btn_get_oakey.setStyleSheet("color: #38bdf8; text-decoration: underline; background: transparent; border: none; text-align: left; font-size: 11px;")
@@ -276,9 +294,12 @@ class AISettingsDialog(QDialog):
         self._btn_deepseek_show = QPushButton("👁", self._panel_deepseek)
         self._btn_deepseek_show.setFixedWidth(30)
         self._btn_deepseek_show.clicked.connect(lambda: self._toggle_echo(self._txt_deepseek_key))
+        self._btn_test_deepseek = QPushButton("🔄 Refresh Models", self._panel_deepseek)
+        self._btn_test_deepseek.clicked.connect(self._refresh_deepseek_models)
         row_dskey.addWidget(lbl_dskey)
         row_dskey.addWidget(self._txt_deepseek_key, stretch=1)
         row_dskey.addWidget(self._btn_deepseek_show)
+        row_dskey.addWidget(self._btn_test_deepseek)
         ds_lay.addLayout(row_dskey)
 
         row_dsmodel = QHBoxLayout()
@@ -287,10 +308,14 @@ class AISettingsDialog(QDialog):
         lbl_dsmodel.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         self._combo_deepseek_model = QComboBox(self._panel_deepseek)
         self._combo_deepseek_model.setEditable(True)
-        self._combo_deepseek_model.addItems(["deepseek-chat", "deepseek-reasoner", "deepseek-vl"])
+        self._combo_deepseek_model.addItems(["deepseek-chat", "deepseek-reasoner"])
         row_dsmodel.addWidget(lbl_dsmodel)
         row_dsmodel.addWidget(self._combo_deepseek_model, stretch=1)
         ds_lay.addLayout(row_dsmodel)
+
+        self._lbl_deepseek_status = QLabel("", self._panel_deepseek)
+        self._lbl_deepseek_status.setStyleSheet("font-size: 11px; font-weight: bold;")
+        ds_lay.addWidget(self._lbl_deepseek_status)
 
         btn_get_dskey = QPushButton("🔗 DeepSeek Platform API Keys", self._panel_deepseek)
         btn_get_dskey.setStyleSheet("color: #38bdf8; text-decoration: underline; background: transparent; border: none; text-align: left; font-size: 11px;")
@@ -366,7 +391,9 @@ class AISettingsDialog(QDialog):
 
         # OpenAI
         self._txt_openai_key.setText(self._settings.value(SETTINGS_OPENAI_KEY, "", type=str))
-        oa_model = self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str)
+        oa_model = self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o", type=str)
+        if self._combo_openai_model.findText(oa_model) == -1:
+            self._combo_openai_model.addItem(oa_model)
         self._combo_openai_model.setCurrentText(oa_model)
 
         # DeepSeek
@@ -466,3 +493,57 @@ class AISettingsDialog(QDialog):
         except Exception as exc:
             self._lbl_gemini_status.setText(f"✕ Validation failed: {exc}")
             self._lbl_gemini_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
+
+    def _refresh_openai_models(self):
+        key = self._txt_openai_key.text().strip()
+        if not key:
+            self._lbl_openai_status.setText("✕ Please enter an OpenAI API Key first.")
+            self._lbl_openai_status.setStyleSheet(f"color: {Colors.AMBER_LIGHT};")
+            return
+        try:
+            self._lbl_openai_status.setText("⏳ Validating API key & querying models...")
+            self._lbl_openai_status.setStyleSheet("color: #38bdf8;")
+            models = AIService.fetch_openai_models(key)
+            if models:
+                current = self._combo_openai_model.currentText()
+                self._combo_openai_model.clear()
+                self._combo_openai_model.addItems(models)
+                if current in models:
+                    self._combo_openai_model.setCurrentText(current)
+                elif "gpt-4o" in models:
+                    self._combo_openai_model.setCurrentText("gpt-4o")
+                self._lbl_openai_status.setText(f"✓ Valid key! Found {len(models)} model(s).")
+                self._lbl_openai_status.setStyleSheet(f"color: {Colors.EMERALD_LIGHT};")
+            else:
+                self._lbl_openai_status.setText("✕ No chat/vision models returned for this key.")
+                self._lbl_openai_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
+        except Exception as exc:
+            self._lbl_openai_status.setText(f"✕ Validation failed: {exc}")
+            self._lbl_openai_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
+
+    def _refresh_deepseek_models(self):
+        key = self._txt_deepseek_key.text().strip()
+        if not key:
+            self._lbl_deepseek_status.setText("✕ Please enter a DeepSeek API Key first.")
+            self._lbl_deepseek_status.setStyleSheet(f"color: {Colors.AMBER_LIGHT};")
+            return
+        try:
+            self._lbl_deepseek_status.setText("⏳ Validating API key & querying models...")
+            self._lbl_deepseek_status.setStyleSheet("color: #38bdf8;")
+            models = AIService.fetch_deepseek_models(key)
+            if models:
+                current = self._combo_deepseek_model.currentText()
+                self._combo_deepseek_model.clear()
+                self._combo_deepseek_model.addItems(models)
+                if current in models:
+                    self._combo_deepseek_model.setCurrentText(current)
+                elif "deepseek-chat" in models:
+                    self._combo_deepseek_model.setCurrentText("deepseek-chat")
+                self._lbl_deepseek_status.setText(f"✓ Valid key! Found {len(models)} model(s).")
+                self._lbl_deepseek_status.setStyleSheet(f"color: {Colors.EMERALD_LIGHT};")
+            else:
+                self._lbl_deepseek_status.setText("✕ No models returned for this key.")
+                self._lbl_deepseek_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
+        except Exception as exc:
+            self._lbl_deepseek_status.setText(f"✕ Validation failed: {exc}")
+            self._lbl_deepseek_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
