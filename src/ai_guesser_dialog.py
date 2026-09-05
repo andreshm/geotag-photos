@@ -28,6 +28,8 @@ from .ai_service import (
     SETTINGS_GEMINI_MODEL,
     SETTINGS_OPENAI_KEY,
     SETTINGS_OPENAI_MODEL,
+    SETTINGS_DEEPSEEK_KEY,
+    SETTINGS_DEEPSEEK_MODEL,
 )
 from .ai_settings_dialog import AISettingsDialog
 
@@ -84,6 +86,11 @@ class _PredictWorker(QObject):
                 api_key = self._settings.get(SETTINGS_OPENAI_KEY, "")
                 model = self._settings.get(SETTINGS_OPENAI_MODEL, "gpt-4o-mini")
                 res = AIService.predict_with_openai(image_b64, prompt, api_key=api_key, model=model)
+
+            elif self._provider == "deepseek":
+                api_key = self._settings.get(SETTINGS_DEEPSEEK_KEY, "")
+                model = self._settings.get(SETTINGS_DEEPSEEK_MODEL, "deepseek-chat")
+                res = AIService.predict_with_deepseek(image_b64, prompt, api_key=api_key, model=model)
 
             else:  # "ollama"
                 server_url = self._settings.get(SETTINGS_OLLAMA_URL, "http://localhost:11434")
@@ -371,6 +378,9 @@ class AIGuesserDialog(QDialog):
         elif prov == "openai":
             model = self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str)
             self._lbl_active_model.setText(f"Active Provider: ⚡ OpenAI ({model})")
+        elif prov == "deepseek":
+            model = self._settings.value(SETTINGS_DEEPSEEK_MODEL, "deepseek-chat", type=str)
+            self._lbl_active_model.setText(f"Active Provider: 🐳 DeepSeek ({model})")
         else:
             model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
             self._lbl_active_model.setText(f"Active Provider: 🦙 Local Ollama ({model})")
@@ -387,6 +397,9 @@ class AIGuesserDialog(QDialog):
             self._lbl_status.setText(f"✨ Google Gemini running forensic visual survey... ({self._elapsed_seconds}s elapsed)")
         elif prov == "openai":
             self._lbl_status.setText(f"⚡ OpenAI analyzing visual features... ({self._elapsed_seconds}s elapsed)")
+        elif prov == "deepseek":
+            model = self._settings.value(SETTINGS_DEEPSEEK_MODEL, "deepseek-chat", type=str)
+            self._lbl_status.setText(f"🐳 DeepSeek reasoning with '{model}'... ({self._elapsed_seconds}s elapsed)")
         else:
             model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
             if self._token_count > 0:
@@ -415,6 +428,9 @@ class AIGuesserDialog(QDialog):
             self._lbl_status.setText("✨ Google Gemini running forensic visual survey... (0s elapsed)")
         elif prov == "openai":
             self._lbl_status.setText("⚡ OpenAI analyzing visual features... (0s elapsed)")
+        elif prov == "deepseek":
+            model = self._settings.value(SETTINGS_DEEPSEEK_MODEL, "deepseek-chat", type=str)
+            self._lbl_status.setText(f"🐳 DeepSeek reasoning with '{model}'... (0s elapsed)")
         else:
             model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
             self._lbl_status.setText(f"🦙 Ollama processing image with '{model}'... (0s elapsed)")
@@ -431,6 +447,8 @@ class AIGuesserDialog(QDialog):
             SETTINGS_GEMINI_MODEL:   self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-2.0-flash", type=str),
             SETTINGS_OPENAI_KEY:     self._settings.value(SETTINGS_OPENAI_KEY, "", type=str),
             SETTINGS_OPENAI_MODEL:   self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str),
+            SETTINGS_DEEPSEEK_KEY:   self._settings.value(SETTINGS_DEEPSEEK_KEY, "", type=str),
+            SETTINGS_DEEPSEEK_MODEL: self._settings.value(SETTINGS_DEEPSEEK_MODEL, "deepseek-chat", type=str),
         }
 
         dt_str = self._item.date_taken.strftime("%Y-%m-%d %H:%M:%S") if self._item.date_taken else ""

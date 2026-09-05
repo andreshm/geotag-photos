@@ -22,6 +22,8 @@ from .ai_service import (
     SETTINGS_GEMINI_MODEL,
     SETTINGS_OPENAI_KEY,
     SETTINGS_OPENAI_MODEL,
+    SETTINGS_DEEPSEEK_KEY,
+    SETTINGS_DEEPSEEK_MODEL,
     AIService,
 )
 
@@ -34,7 +36,7 @@ class AISettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI Vision Geolocation Configuration")
-        self.setFixedSize(600, 520)
+        self.setFixedSize(620, 530)
         self.setStyleSheet(STYLE_MODERN_CYBER)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
@@ -71,20 +73,23 @@ class AISettingsDialog(QDialog):
         layout.addWidget(lbl_prov)
 
         prov_row = QHBoxLayout()
-        prov_row.setSpacing(12)
-        self._rb_ollama = QRadioButton("🦙 Local Ollama (Free & Offline)", self)
-        self._rb_gemini = QRadioButton("✨ Google Gemini", self)
+        prov_row.setSpacing(10)
+        self._rb_ollama = QRadioButton("🦙 Ollama (Local)", self)
+        self._rb_gemini = QRadioButton("✨ Gemini", self)
         self._rb_openai = QRadioButton("⚡ OpenAI", self)
+        self._rb_deepseek = QRadioButton("🐳 DeepSeek", self)
 
         self._btn_grp = QButtonGroup(self)
         self._btn_grp.addButton(self._rb_ollama, 0)
         self._btn_grp.addButton(self._rb_gemini, 1)
         self._btn_grp.addButton(self._rb_openai, 2)
+        self._btn_grp.addButton(self._rb_deepseek, 3)
         self._btn_grp.idClicked.connect(self._on_provider_changed)
 
         prov_row.addWidget(self._rb_ollama)
         prov_row.addWidget(self._rb_gemini)
         prov_row.addWidget(self._rb_openai)
+        prov_row.addWidget(self._rb_deepseek)
         layout.addLayout(prov_row)
 
         # Container Card for Provider Settings
@@ -250,6 +255,50 @@ class AISettingsDialog(QDialog):
         oa_lay.addWidget(btn_get_oakey)
 
         self._card_lay.addWidget(self._panel_openai)
+
+        # ── DeepSeek Panel ──
+        self._panel_deepseek = QWidget(self._card)
+        ds_lay = QVBoxLayout(self._panel_deepseek)
+        ds_lay.setContentsMargins(0, 0, 0, 0)
+        ds_lay.setSpacing(8)
+
+        lbl_ds_desc = QLabel("Forensic reasoning and visual deduction with DeepSeek API (V3/R1).", self._panel_deepseek)
+        lbl_ds_desc.setStyleSheet(f"font-size: 11px; color: #60a5fa;")
+        ds_lay.addWidget(lbl_ds_desc)
+
+        row_dskey = QHBoxLayout()
+        lbl_dskey = QLabel("API Key:", self._panel_deepseek)
+        lbl_dskey.setFixedWidth(80)
+        lbl_dskey.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self._txt_deepseek_key = QLineEdit(self._panel_deepseek)
+        self._txt_deepseek_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._txt_deepseek_key.setPlaceholderText("sk-...")
+        self._btn_deepseek_show = QPushButton("👁", self._panel_deepseek)
+        self._btn_deepseek_show.setFixedWidth(30)
+        self._btn_deepseek_show.clicked.connect(lambda: self._toggle_echo(self._txt_deepseek_key))
+        row_dskey.addWidget(lbl_dskey)
+        row_dskey.addWidget(self._txt_deepseek_key, stretch=1)
+        row_dskey.addWidget(self._btn_deepseek_show)
+        ds_lay.addLayout(row_dskey)
+
+        row_dsmodel = QHBoxLayout()
+        lbl_dsmodel = QLabel("Model:", self._panel_deepseek)
+        lbl_dsmodel.setFixedWidth(80)
+        lbl_dsmodel.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self._combo_deepseek_model = QComboBox(self._panel_deepseek)
+        self._combo_deepseek_model.setEditable(True)
+        self._combo_deepseek_model.addItems(["deepseek-chat", "deepseek-reasoner", "deepseek-vl"])
+        row_dsmodel.addWidget(lbl_dsmodel)
+        row_dsmodel.addWidget(self._combo_deepseek_model, stretch=1)
+        ds_lay.addLayout(row_dsmodel)
+
+        btn_get_dskey = QPushButton("🔗 DeepSeek Platform API Keys", self._panel_deepseek)
+        btn_get_dskey.setStyleSheet("color: #38bdf8; text-decoration: underline; background: transparent; border: none; text-align: left; font-size: 11px;")
+        btn_get_dskey.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_get_dskey.clicked.connect(lambda: webbrowser.open("https://platform.deepseek.com/api_keys"))
+        ds_lay.addWidget(btn_get_dskey)
+
+        self._card_lay.addWidget(self._panel_deepseek)
         layout.addWidget(self._card)
 
         # Dialog Buttons
@@ -277,6 +326,7 @@ class AISettingsDialog(QDialog):
         self._panel_ollama.setVisible(idx == 0)
         self._panel_gemini.setVisible(idx == 1)
         self._panel_openai.setVisible(idx == 2)
+        self._panel_deepseek.setVisible(idx == 3)
 
     def _load_settings(self):
         prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
@@ -286,6 +336,9 @@ class AISettingsDialog(QDialog):
         elif prov == "openai":
             self._rb_openai.setChecked(True)
             self._on_provider_changed(2)
+        elif prov == "deepseek":
+            self._rb_deepseek.setChecked(True)
+            self._on_provider_changed(3)
         else:
             self._rb_ollama.setChecked(True)
             self._on_provider_changed(0)
@@ -316,22 +369,33 @@ class AISettingsDialog(QDialog):
         oa_model = self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str)
         self._combo_openai_model.setCurrentText(oa_model)
 
+        # DeepSeek
+        self._txt_deepseek_key.setText(self._settings.value(SETTINGS_DEEPSEEK_KEY, "", type=str))
+        ds_model = self._settings.value(SETTINGS_DEEPSEEK_MODEL, "deepseek-chat", type=str)
+        if self._combo_deepseek_model.findText(ds_model) == -1:
+            self._combo_deepseek_model.addItem(ds_model)
+        self._combo_deepseek_model.setCurrentText(ds_model)
+
     def _save_settings(self):
         if self._rb_gemini.isChecked():
             prov = "gemini"
         elif self._rb_openai.isChecked():
             prov = "openai"
+        elif self._rb_deepseek.isChecked():
+            prov = "deepseek"
         else:
             prov = "ollama"
 
         self._settings.setValue(SETTINGS_AI_PROVIDER, prov)
-        self._settings.setValue(SETTINGS_OLLAMA_URL,   self._txt_ollama_url.text().strip() or "http://localhost:11434")
-        self._settings.setValue(SETTINGS_OLLAMA_MODEL, self._combo_ollama_model.currentText().strip() or "llama3.2-vision")
+        self._settings.setValue(SETTINGS_OLLAMA_URL,     self._txt_ollama_url.text().strip() or "http://localhost:11434")
+        self._settings.setValue(SETTINGS_OLLAMA_MODEL,   self._combo_ollama_model.currentText().strip() or "llama3.2-vision")
         self._settings.setValue(SETTINGS_OLLAMA_TIMEOUT, int(self._combo_ollama_timeout.currentData() or 360))
-        self._settings.setValue(SETTINGS_GEMINI_KEY,   self._txt_gemini_key.text().strip())
-        self._settings.setValue(SETTINGS_GEMINI_MODEL, self._combo_gemini_model.currentText().strip())
-        self._settings.setValue(SETTINGS_OPENAI_KEY,   self._txt_openai_key.text().strip())
-        self._settings.setValue(SETTINGS_OPENAI_MODEL, self._combo_openai_model.currentText().strip())
+        self._settings.setValue(SETTINGS_GEMINI_KEY,     self._txt_gemini_key.text().strip())
+        self._settings.setValue(SETTINGS_GEMINI_MODEL,   self._combo_gemini_model.currentText().strip())
+        self._settings.setValue(SETTINGS_OPENAI_KEY,     self._txt_openai_key.text().strip())
+        self._settings.setValue(SETTINGS_OPENAI_MODEL,   self._combo_openai_model.currentText().strip())
+        self._settings.setValue(SETTINGS_DEEPSEEK_KEY,   self._txt_deepseek_key.text().strip())
+        self._settings.setValue(SETTINGS_DEEPSEEK_MODEL, self._combo_deepseek_model.currentText().strip())
         self._settings.sync()
 
         self.accept()

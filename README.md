@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
   <img src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-green?style=for-the-badge&logo=qt&logoColor=white" alt="PySide6 / Qt6" />
-  <img src="https://img.shields.io/badge/Vision%20AI-Ollama%20%7C%20Gemini%20%7C%20OpenAI-purple?style=for-the-badge" alt="Vision AI" />
+  <img src="https://img.shields.io/badge/Vision%20AI-Ollama%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20DeepSeek-purple?style=for-the-badge" alt="Vision AI" />
   <img src="https://img.shields.io/badge/Engine-ExifTool-orange?style=for-the-badge" alt="ExifTool" />
   <img src="https://img.shields.io/badge/Maps-Leaflet%20%26%20OpenStreetMap-blueviolet?style=for-the-badge&logo=leaflet&logoColor=white" alt="Leaflet & OSM" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=for-the-badge" alt="Cross Platform" />
@@ -30,7 +30,7 @@ Unlike simple EXIF editors, **GeoTag Studio PRO** is built for high-volume trave
        │   • Satellite Hybrid Imagery │   • RAW+JPEG Auto-Pairing    │
        │   • Nominatim Global Search  │   • Live GPS Badges          │
        ├──────────────────────────────┴──────────────────────────────┤
-       │   🤖 AI Vision Location Predictor (Ollama / Gemini / OpenAI) │
+       │   🤖 AI Vision Geocoding (Ollama / Gemini / OpenAI / DeepSeek) │
        │   ⚡ Timeline GPS Auto-Tagger & Linear Interpolator          │
        │   🛡️ Mirrored Directory Backup Center & 1-Click Restore     │
        │   🛑 Graceful Save Engine with Single-Job Integrity         │
@@ -43,7 +43,7 @@ Unlike simple EXIF editors, **GeoTag Studio PRO** is built for high-volume trave
 ## ✨ Key Features
 
 ### 🤖 AI Vision Location Guesser & Contextual Trip Vision
-* **Multi-Provider Vision AI**: Guess photo locations using **Local Ollama** (100% Free & Private via `localhost:11434`), **Google Gemini** (`gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-pro`), or **OpenAI** (`gpt-4o-mini`, `gpt-4o`).
+* **Multi-Provider Vision AI**: Guess photo locations using **Local Ollama** (100% Free & Private via `localhost:11434`), **Google Gemini** (`gemini-2.0-flash`, `gemini-1.5-flash`), **OpenAI** (`gpt-4o-mini`, `gpt-4o`), or **DeepSeek** (`deepseek-chat`, `deepseek-reasoner`).
 * **Smart Same-Day Trip Heuristics**: Automatically extracts verified GPS anchors from other photos taken on the **exact same calendar day**, giving the AI strong regional context to pinpoint locations with high precision.
 * **Auto-Fallback & Live Model Discovery**: Built-in `🔄 Refresh Models` button for Gemini and Ollama to validate API keys and list active models. Includes automatic multi-endpoint fallback if a legacy model ID is discontinued.
 * **Extended Local AI Timeout & Live Timer**: Configurable Ollama execution timeout (from 3 to 20 minutes) with real-time elapsed second counter for heavy 9B/11B local vision models.

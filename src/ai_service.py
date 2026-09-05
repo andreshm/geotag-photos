@@ -17,7 +17,7 @@ from PIL import Image
 log = logging.getLogger(__name__)
 
 # Settings Keys
-SETTINGS_AI_PROVIDER  = "ai/provider"        # "ollama", "gemini", "openai"
+SETTINGS_AI_PROVIDER  = "ai/provider"        # "ollama", "gemini", "openai", "deepseek"
 SETTINGS_OLLAMA_URL    = "ai/ollama_url"      # default "http://localhost:11434"
 SETTINGS_OLLAMA_MODEL  = "ai/ollama_model"    # default "llama3.2-vision"
 SETTINGS_OLLAMA_TIMEOUT= "ai/ollama_timeout"  # default 360 (seconds)
@@ -25,6 +25,8 @@ SETTINGS_GEMINI_KEY    = "ai/gemini_key"
 SETTINGS_GEMINI_MODEL  = "ai/gemini_model"    # default "gemini-2.0-flash"
 SETTINGS_OPENAI_KEY    = "ai/openai_key"
 SETTINGS_OPENAI_MODEL  = "ai/openai_model"    # default "gpt-4o-mini"
+SETTINGS_DEEPSEEK_KEY  = "ai/deepseek_key"
+SETTINGS_DEEPSEEK_MODEL= "ai/deepseek_model"  # default "deepseek-chat"
 
 
 @dataclass
@@ -573,3 +575,92 @@ class AIService:
         except urllib.error.HTTPError as exc:
             err_msg = exc.read().decode("utf-8", errors="ignore")
             raise ConnectionError(f"OpenAI API Error ({exc.code}): {err_msg}")
+
+    # ── Provider 4: DeepSeek ──────────────────────────────────────────────────
+
+    @classmethod
+    def predict_with_deepseek(
+        cls,
+        image_b64: str,
+        prompt: str,
+        api_key: str,
+        model: str = "deepseek-chat",
+        server_url: str = "https://api.deepseek.com",
+        timeout: int = 90,
+    ) -> AIPredictionResult:
+        """Sends prompt and image context to DeepSeek API (OpenAI-compatible)."""
+        if not api_key or not api_key.strip():
+            raise ValueError("DeepSeek API Key is missing. Configure it in ⚙️ AI Settings.")
+
+        url = server_url.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_b64}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+        }
+
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key.strip()}",
+                "User-Agent": "GeoTagStudioPRO/2.0",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                res_json = json.loads(resp.read().decode("utf-8"))
+                choices = res_json.get("choices", [])
+                if not choices:
+                    raise ValueError(f"DeepSeek returned no choices: {res_json}")
+                msg = choices[0]["message"]
+                text = msg.get("content", "")
+                reasoning = msg.get("reasoning_content", "")
+                if reasoning and text:
+                    text = f"<think>{reasoning}</think>\n{text}"
+                return cls.parse_json_response(text, "DeepSeek", model)
+        except urllib.error.HTTPError as exc:
+            err_msg = exc.read().decode("utf-8", errors="ignore")
+            # If model does not support multimodal image_url, fallback to pure text prompt
+            if "image" in err_msg.lower() or exc.code in (400, 422):
+                payload_text = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                }
+                req_text = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload_text).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key.strip()}",
+                        "User-Agent": "GeoTagStudioPRO/2.0",
+                    },
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req_text, timeout=timeout) as resp_text:
+                        res_json = json.loads(resp_text.read().decode("utf-8"))
+                        text = res_json.get("choices", [])[0]["message"].get("content", "")
+                        return cls.parse_json_response(text, "DeepSeek", model)
+                except Exception:
+                    pass
+            raise ConnectionError(f"DeepSeek API Error ({exc.code}): {err_msg}")
+
