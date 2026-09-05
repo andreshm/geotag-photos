@@ -43,8 +43,10 @@ Unlike simple EXIF editors, **GeoTag Studio PRO** is built for high-volume trave
 ## ✨ Key Features
 
 ### 🤖 AI Vision Location Guesser & Contextual Trip Vision
-* **Multi-Provider Vision AI**: Guess photo locations using **Local Ollama** (100% Free & Private via `localhost:11434`), **Google Gemini** (`gemini-1.5-flash`, `gemini-1.5-pro`), or **OpenAI** (`gpt-4o-mini`, `gpt-4o`).
+* **Multi-Provider Vision AI**: Guess photo locations using **Local Ollama** (100% Free & Private via `localhost:11434`), **Google Gemini** (`gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-pro`), or **OpenAI** (`gpt-4o-mini`, `gpt-4o`).
 * **Smart Same-Day Trip Heuristics**: Automatically extracts verified GPS anchors from other photos taken on the **exact same calendar day**, giving the AI strong regional context to pinpoint locations with high precision.
+* **Auto-Fallback & Live Model Discovery**: Built-in `🔄 Refresh Models` button for Gemini and Ollama to validate API keys and list active models. Includes automatic multi-endpoint fallback if a legacy model ID is discontinued.
+* **Extended Local AI Timeout & Live Timer**: Configurable Ollama execution timeout (from 3 to 20 minutes) with real-time elapsed second counter for heavy 9B/11B local vision models.
 * **User Memory Clues**: Provide optional text hints (e.g., *"I think this was in Florence near a cathedral"*).
 * **1-Click Actions**: Preview predicted coordinates on the map or assign them directly to the photo card in 1 click.
 * **Top-Bar AI Configuration**: Configure providers, server URLs, and API keys easily via the `🤖 AI Config` toolbar button.

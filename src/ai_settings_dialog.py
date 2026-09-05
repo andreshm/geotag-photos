@@ -17,6 +17,7 @@ from .ai_service import (
     SETTINGS_AI_PROVIDER,
     SETTINGS_OLLAMA_URL,
     SETTINGS_OLLAMA_MODEL,
+    SETTINGS_OLLAMA_TIMEOUT,
     SETTINGS_GEMINI_KEY,
     SETTINGS_GEMINI_MODEL,
     SETTINGS_OPENAI_KEY,
@@ -33,7 +34,7 @@ class AISettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI Vision Geolocation Configuration")
-        self.setFixedSize(580, 480)
+        self.setFixedSize(600, 520)
         self.setStyleSheet(STYLE_MODERN_CYBER)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
@@ -125,11 +126,25 @@ class AISettingsDialog(QDialog):
         lbl_omodel.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         self._combo_ollama_model = QComboBox(self._panel_ollama)
         self._combo_ollama_model.setEditable(True)
-        self._combo_ollama_model.addItems(["llama3.2-vision", "llama3.2-vision:11b", "llava", "llava:13b", "minicpm-v", "qwen2.5-vl", "bakllava"])
+        self._combo_ollama_model.addItems(["llama3.2-vision", "llama3.2-vision:11b", "llava", "llava:13b", "minicpm-v", "qwen2.5-vl", "qwen3.5:9b", "bakllava"])
         self._combo_ollama_model.currentTextChanged.connect(self._check_vision_model_compatibility)
         row_omodel.addWidget(lbl_omodel)
         row_omodel.addWidget(self._combo_ollama_model, stretch=1)
         o_lay.addLayout(row_omodel)
+
+        row_timeout = QHBoxLayout()
+        lbl_timeout = QLabel("Timeout Limit:", self._panel_ollama)
+        lbl_timeout.setFixedWidth(80)
+        lbl_timeout.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self._combo_ollama_timeout = QComboBox(self._panel_ollama)
+        self._combo_ollama_timeout.addItem("180 seconds (3 min)", 180)
+        self._combo_ollama_timeout.addItem("360 seconds (6 min - Default)", 360)
+        self._combo_ollama_timeout.addItem("600 seconds (10 min)", 600)
+        self._combo_ollama_timeout.addItem("900 seconds (15 min)", 900)
+        self._combo_ollama_timeout.addItem("1200 seconds (20 min)", 1200)
+        row_timeout.addWidget(lbl_timeout)
+        row_timeout.addWidget(self._combo_ollama_timeout, stretch=1)
+        o_lay.addLayout(row_timeout)
 
         self._lbl_model_hint = QLabel("", self._panel_ollama)
         self._lbl_model_hint.setStyleSheet("font-size: 10.5px; color: #fbbf24;")
@@ -162,9 +177,12 @@ class AISettingsDialog(QDialog):
         self._btn_gemini_show = QPushButton("👁", self._panel_gemini)
         self._btn_gemini_show.setFixedWidth(30)
         self._btn_gemini_show.clicked.connect(lambda: self._toggle_echo(self._txt_gemini_key))
+        self._btn_test_gemini = QPushButton("🔄 Refresh Models", self._panel_gemini)
+        self._btn_test_gemini.clicked.connect(self._refresh_gemini_models)
         row_gkey.addWidget(lbl_gkey)
         row_gkey.addWidget(self._txt_gemini_key, stretch=1)
         row_gkey.addWidget(self._btn_gemini_show)
+        row_gkey.addWidget(self._btn_test_gemini)
         g_lay.addLayout(row_gkey)
 
         row_gmodel = QHBoxLayout()
@@ -172,10 +190,15 @@ class AISettingsDialog(QDialog):
         lbl_gmodel.setFixedWidth(80)
         lbl_gmodel.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         self._combo_gemini_model = QComboBox(self._panel_gemini)
-        self._combo_gemini_model.addItems(["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"])
+        self._combo_gemini_model.setEditable(True)
+        self._combo_gemini_model.addItems(["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-1.5-flash-latest"])
         row_gmodel.addWidget(lbl_gmodel)
         row_gmodel.addWidget(self._combo_gemini_model, stretch=1)
         g_lay.addLayout(row_gmodel)
+
+        self._lbl_gemini_status = QLabel("", self._panel_gemini)
+        self._lbl_gemini_status.setStyleSheet("font-size: 11px; font-weight: bold;")
+        g_lay.addWidget(self._lbl_gemini_status)
 
         btn_get_gkey = QPushButton("🔗 Get Free Google AI Studio API Key", self._panel_gemini)
         btn_get_gkey.setStyleSheet("color: #38bdf8; text-decoration: underline; background: transparent; border: none; text-align: left; font-size: 11px;")
@@ -274,9 +297,18 @@ class AISettingsDialog(QDialog):
             self._combo_ollama_model.addItem(o_model)
         self._combo_ollama_model.setCurrentText(o_model)
 
+        o_timeout = self._settings.value(SETTINGS_OLLAMA_TIMEOUT, 360, type=int)
+        idx_timeout = self._combo_ollama_timeout.findData(o_timeout)
+        if idx_timeout != -1:
+            self._combo_ollama_timeout.setCurrentIndex(idx_timeout)
+        else:
+            self._combo_ollama_timeout.setCurrentIndex(1)  # 360s default
+
         # Gemini
         self._txt_gemini_key.setText(self._settings.value(SETTINGS_GEMINI_KEY, "", type=str))
-        g_model = self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-1.5-flash", type=str)
+        g_model = self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-2.0-flash", type=str)
+        if self._combo_gemini_model.findText(g_model) == -1:
+            self._combo_gemini_model.addItem(g_model)
         self._combo_gemini_model.setCurrentText(g_model)
 
         # OpenAI
@@ -295,6 +327,7 @@ class AISettingsDialog(QDialog):
         self._settings.setValue(SETTINGS_AI_PROVIDER, prov)
         self._settings.setValue(SETTINGS_OLLAMA_URL,   self._txt_ollama_url.text().strip() or "http://localhost:11434")
         self._settings.setValue(SETTINGS_OLLAMA_MODEL, self._combo_ollama_model.currentText().strip() or "llama3.2-vision")
+        self._settings.setValue(SETTINGS_OLLAMA_TIMEOUT, int(self._combo_ollama_timeout.currentData() or 360))
         self._settings.setValue(SETTINGS_GEMINI_KEY,   self._txt_gemini_key.text().strip())
         self._settings.setValue(SETTINGS_GEMINI_MODEL, self._combo_gemini_model.currentText().strip())
         self._settings.setValue(SETTINGS_OPENAI_KEY,   self._txt_openai_key.text().strip())
@@ -340,3 +373,32 @@ class AISettingsDialog(QDialog):
         except Exception as exc:
             self._lbl_ollama_status.setText(f"✕ Could not connect to {url}: {exc}")
             self._lbl_ollama_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
+
+    def _refresh_gemini_models(self):
+        key = self._txt_gemini_key.text().strip()
+        if not key:
+            self._lbl_gemini_status.setText("✕ Please enter a Google Gemini API Key first.")
+            self._lbl_gemini_status.setStyleSheet(f"color: {Colors.AMBER_LIGHT};")
+            return
+        try:
+            self._lbl_gemini_status.setText("⏳ Validating API key & listing models...")
+            self._lbl_gemini_status.setStyleSheet("color: #38bdf8;")
+            models = AIService.fetch_gemini_models(key)
+            if models:
+                current = self._combo_gemini_model.currentText()
+                self._combo_gemini_model.clear()
+                self._combo_gemini_model.addItems(models)
+                if current in models:
+                    self._combo_gemini_model.setCurrentText(current)
+                elif "gemini-2.0-flash" in models:
+                    self._combo_gemini_model.setCurrentText("gemini-2.0-flash")
+                elif "gemini-1.5-flash" in models:
+                    self._combo_gemini_model.setCurrentText("gemini-1.5-flash")
+                self._lbl_gemini_status.setText(f"✓ Valid key! Found {len(models)} active model(s).")
+                self._lbl_gemini_status.setStyleSheet(f"color: {Colors.EMERALD_LIGHT};")
+            else:
+                self._lbl_gemini_status.setText("✕ No supported vision models found for this key.")
+                self._lbl_gemini_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")
+        except Exception as exc:
+            self._lbl_gemini_status.setText(f"✕ Validation failed: {exc}")
+            self._lbl_gemini_status.setStyleSheet(f"color: {Colors.ROSE_LIGHT};")

@@ -17,13 +17,14 @@ from PIL import Image
 log = logging.getLogger(__name__)
 
 # Settings Keys
-SETTINGS_AI_PROVIDER = "ai/provider"       # "ollama", "gemini", "openai"
-SETTINGS_OLLAMA_URL   = "ai/ollama_url"     # default "http://localhost:11434"
-SETTINGS_OLLAMA_MODEL = "ai/ollama_model"   # default "llama3.2-vision"
-SETTINGS_GEMINI_KEY   = "ai/gemini_key"
-SETTINGS_GEMINI_MODEL = "ai/gemini_model"   # default "gemini-1.5-flash"
-SETTINGS_OPENAI_KEY   = "ai/openai_key"
-SETTINGS_OPENAI_MODEL = "ai/openai_model"   # default "gpt-4o-mini"
+SETTINGS_AI_PROVIDER  = "ai/provider"        # "ollama", "gemini", "openai"
+SETTINGS_OLLAMA_URL    = "ai/ollama_url"      # default "http://localhost:11434"
+SETTINGS_OLLAMA_MODEL  = "ai/ollama_model"    # default "llama3.2-vision"
+SETTINGS_OLLAMA_TIMEOUT= "ai/ollama_timeout"  # default 360 (seconds)
+SETTINGS_GEMINI_KEY    = "ai/gemini_key"
+SETTINGS_GEMINI_MODEL  = "ai/gemini_model"    # default "gemini-2.0-flash"
+SETTINGS_OPENAI_KEY    = "ai/openai_key"
+SETTINGS_OPENAI_MODEL  = "ai/openai_model"    # default "gpt-4o-mini"
 
 
 @dataclass
@@ -227,7 +228,7 @@ class AIService:
         prompt: str,
         server_url: str = "http://localhost:11434",
         model: str = "llama3.2-vision",
-        timeout: int = 120,
+        timeout: int = 360,
     ) -> AIPredictionResult:
         """Sends image and prompt to local Ollama vision model using the modern /api/chat endpoint."""
         url_chat = server_url.rstrip("/") + "/api/chat"
@@ -287,20 +288,49 @@ class AIService:
     # ── Provider 2: Google Gemini ─────────────────────────────────────────────
 
     @classmethod
+    def fetch_gemini_models(cls, api_key: str) -> list[str]:
+        """Fetches active supported vision models for the user's Gemini API key."""
+        if not api_key or not api_key.strip():
+            return []
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key.strip()}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "GeoTagStudioPRO/2.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = []
+                for m in data.get("models", []):
+                    methods = m.get("supportedGenerationMethods", [])
+                    name = m.get("name", "").replace("models/", "")
+                    if "generateContent" in methods and "gemini" in name:
+                        models.append(name)
+                return models
+        except Exception as exc:
+            log.warning("Could not list Gemini models: %s", exc)
+            return []
+
+    @classmethod
     def predict_with_gemini(
         cls,
         image_b64: str,
         prompt: str,
         api_key: str,
-        model: str = "gemini-1.5-flash",
-        timeout: int = 60,
+        model: str = "gemini-2.0-flash",
+        timeout: int = 90,
     ) -> AIPredictionResult:
-        """Sends image and prompt to Google Gemini Vision API."""
+        """Sends image and prompt to Google Gemini Vision API with automatic fallback on deprecated/404 models."""
         if not api_key or not api_key.strip():
             raise ValueError("Google Gemini API Key is missing. Configure it in ⚙️ AI Settings.")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key.strip()}"
-        
+        # Candidate fallback models in priority order
+        candidates = [model, "gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro-latest"]
+        # Deduplicate while preserving order
+        seen = set()
+        model_queue = []
+        for m in candidates:
+            if m and m not in seen:
+                seen.add(m)
+                model_queue.append(m)
+
         payload = {
             "contents": [
                 {
@@ -320,26 +350,40 @@ class AIService:
                 "response_mime_type": "application/json",
             },
         }
-
         data_bytes = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data_bytes,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
 
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                res_json = json.loads(resp.read().decode("utf-8"))
-                candidates = res_json.get("candidates", [])
-                if not candidates:
-                    raise ValueError(f"Gemini returned no candidates: {res_json}")
-                text = candidates[0]["content"]["parts"][0]["text"]
-                return cls.parse_json_response(text, "Google Gemini", model)
-        except urllib.error.HTTPError as exc:
-            err_msg = exc.read().decode("utf-8", errors="ignore")
-            raise ConnectionError(f"Gemini API Error ({exc.code}): {err_msg}")
+        last_error = None
+        for candidate_model in model_queue:
+            # Try v1beta then v1 endpoint
+            for api_ver in ("v1beta", "v1"):
+                url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{candidate_model}:generateContent?key={api_key.strip()}"
+                req = urllib.request.Request(
+                    url,
+                    data=data_bytes,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        res_json = json.loads(resp.read().decode("utf-8"))
+                        candidates_list = res_json.get("candidates", [])
+                        if not candidates_list:
+                            continue
+                        text = candidates_list[0]["content"]["parts"][0]["text"]
+                        return cls.parse_json_response(text, "Google Gemini", candidate_model)
+                except urllib.error.HTTPError as exc:
+                    err_msg = exc.read().decode("utf-8", errors="ignore")
+                    last_error = f"Gemini API Error ({exc.code}): {err_msg}"
+                    # If 404 (model not found / deprecated), silently try next candidate model
+                    if exc.code == 404:
+                        log.info("Gemini model '%s' returned 404 on %s. Trying next candidate...", candidate_model, api_ver)
+                        continue
+                    else:
+                        raise ConnectionError(last_error)
+                except Exception as exc:
+                    last_error = str(exc)
+        raise ConnectionError(f"All Gemini model endpoints failed. Last response: {last_error}")
 
     # ── Provider 3: OpenAI ────────────────────────────────────────────────────
 

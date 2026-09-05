@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread, QObject, QSettings
+from PySide6.QtCore import Qt, Signal, QThread, QObject, QSettings, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPainter, QBrush, QColor, QPen, QFont
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -23,6 +23,7 @@ from .ai_service import (
     SETTINGS_AI_PROVIDER,
     SETTINGS_OLLAMA_URL,
     SETTINGS_OLLAMA_MODEL,
+    SETTINGS_OLLAMA_TIMEOUT,
     SETTINGS_GEMINI_KEY,
     SETTINGS_GEMINI_MODEL,
     SETTINGS_OPENAI_KEY,
@@ -75,7 +76,7 @@ class _PredictWorker(QObject):
             # 3. Query selected provider
             if self._provider == "gemini":
                 api_key = self._settings.get(SETTINGS_GEMINI_KEY, "")
-                model = self._settings.get(SETTINGS_GEMINI_MODEL, "gemini-1.5-flash")
+                model = self._settings.get(SETTINGS_GEMINI_MODEL, "gemini-2.0-flash")
                 res = AIService.predict_with_gemini(image_b64, prompt, api_key=api_key, model=model)
 
             elif self._provider == "openai":
@@ -86,7 +87,8 @@ class _PredictWorker(QObject):
             else:  # "ollama"
                 server_url = self._settings.get(SETTINGS_OLLAMA_URL, "http://localhost:11434")
                 model = self._settings.get(SETTINGS_OLLAMA_MODEL, "llama3.2-vision")
-                res = AIService.predict_with_ollama(image_b64, prompt, server_url=server_url, model=model)
+                timeout = int(self._settings.get(SETTINGS_OLLAMA_TIMEOUT, 360))
+                res = AIService.predict_with_ollama(image_b64, prompt, server_url=server_url, model=model, timeout=timeout)
 
             self.finished.emit(res)
         except Exception as exc:
@@ -112,6 +114,10 @@ class AIGuesserDialog(QDialog):
         self._settings = QSettings("GeoTag", "GeoTagStudioPRO")
         self._last_result: Optional[AIPredictionResult] = None
         self._thread: Optional[QThread] = None
+        self._elapsed_seconds = 0
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.setInterval(1000)
+        self._elapsed_timer.timeout.connect(self._on_timer_tick)
 
         self.setWindowTitle("AI Location Guesser & Vision Geocoding")
         self.setFixedSize(680, 620)
@@ -330,7 +336,7 @@ class AIGuesserDialog(QDialog):
     def _load_active_provider_label(self):
         prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
         if prov == "gemini":
-            model = self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-1.5-flash", type=str)
+            model = self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-2.0-flash", type=str)
             self._lbl_active_model.setText(f"Active Provider: ✨ Google Gemini ({model})")
         elif prov == "openai":
             model = self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str)
@@ -344,23 +350,46 @@ class AIGuesserDialog(QDialog):
         if dlg.exec():
             self._load_active_provider_label()
 
+    def _on_timer_tick(self):
+        self._elapsed_seconds += 1
+        prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
+        if prov == "gemini":
+            self._lbl_status.setText(f"✨ Google Gemini querying vision API... ({self._elapsed_seconds}s elapsed)")
+        elif prov == "openai":
+            self._lbl_status.setText(f"⚡ OpenAI analyzing visual features... ({self._elapsed_seconds}s elapsed)")
+        else:
+            model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
+            self._lbl_status.setText(f"🦙 Ollama running '{model}' locally... ({self._elapsed_seconds}s elapsed)")
+
     def _on_start_prediction(self):
         self._btn_predict.setEnabled(False)
         self._progress.setVisible(True)
         self._lbl_status.setVisible(True)
-        self._lbl_status.setText("🤖 Analyzing visual features, landmarks, and trip context...")
+        self._lbl_status.setStyleSheet(f"font-size: 11px; color: {Colors.CYAN_LIGHT}; font-style: italic;")
+        self._elapsed_seconds = 0
+        self._elapsed_timer.start()
+
+        prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
+        if prov == "gemini":
+            self._lbl_status.setText("✨ Google Gemini querying vision API... (0s elapsed)")
+        elif prov == "openai":
+            self._lbl_status.setText("⚡ OpenAI analyzing visual features... (0s elapsed)")
+        else:
+            model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
+            self._lbl_status.setText(f"🦙 Ollama running '{model}' locally... (0s elapsed)")
+
         self._res_card.setVisible(False)
         self._btn_preview.setVisible(False)
         self._btn_apply.setVisible(False)
 
-        prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
         settings_dict = {
-            SETTINGS_OLLAMA_URL:   self._settings.value(SETTINGS_OLLAMA_URL, "http://localhost:11434", type=str),
-            SETTINGS_OLLAMA_MODEL: self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str),
-            SETTINGS_GEMINI_KEY:   self._settings.value(SETTINGS_GEMINI_KEY, "", type=str),
-            SETTINGS_GEMINI_MODEL: self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-1.5-flash", type=str),
-            SETTINGS_OPENAI_KEY:   self._settings.value(SETTINGS_OPENAI_KEY, "", type=str),
-            SETTINGS_OPENAI_MODEL: self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str),
+            SETTINGS_OLLAMA_URL:     self._settings.value(SETTINGS_OLLAMA_URL, "http://localhost:11434", type=str),
+            SETTINGS_OLLAMA_MODEL:   self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str),
+            SETTINGS_OLLAMA_TIMEOUT: self._settings.value(SETTINGS_OLLAMA_TIMEOUT, 360, type=int),
+            SETTINGS_GEMINI_KEY:     self._settings.value(SETTINGS_GEMINI_KEY, "", type=str),
+            SETTINGS_GEMINI_MODEL:   self._settings.value(SETTINGS_GEMINI_MODEL, "gemini-2.0-flash", type=str),
+            SETTINGS_OPENAI_KEY:     self._settings.value(SETTINGS_OPENAI_KEY, "", type=str),
+            SETTINGS_OPENAI_MODEL:   self._settings.value(SETTINGS_OPENAI_MODEL, "gpt-4o-mini", type=str),
         }
 
         dt_str = self._item.date_taken.strftime("%Y-%m-%d %H:%M:%S") if self._item.date_taken else ""
@@ -419,6 +448,8 @@ class AIGuesserDialog(QDialog):
         QMessageBox.warning(self, "AI Prediction Failed", f"Could not determine location:\n\n{err_msg}")
 
     def _cleanup_thread(self):
+        if self._elapsed_timer.isActive():
+            self._elapsed_timer.stop()
         if self._thread and self._thread.isRunning():
             self._thread.quit()
             self._thread.wait(500)
