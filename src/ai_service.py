@@ -36,6 +36,7 @@ class AIPredictionResult:
     reasoning: str
     provider_used: str
     model_used: str
+    candidates: Optional[list[dict]] = None  # Ranked candidate locations
     raw_response: str = ""
 
 
@@ -68,59 +69,95 @@ class AIService:
         date_str: str = "",
         camera_model: str = "",
     ) -> str:
-        """Constructs a rich contextual prompt with same-day GPS anchors and clues."""
+        """Constructs a rich forensic geolocation prompt with visual breakdown, context weighing, and ranked candidates."""
         prompt_parts = [
-            "You are an expert geolocation investigator and vision analyst.",
-            "Analyze the visual features of this image (architecture, landmarks, terrain, vegetation, signs, text, road markings, lighting, culture) to determine where on Earth it was taken.",
+            "You are an expert forensic geolocation analyst. Determine where this photograph was taken using every visual clue available plus the context below. Work through the evidence step by step before concluding. A specific, well-reasoned guess is far more useful than a refusal, so always commit to your best answer even under uncertainty, narrowing to a city or region level if you cannot be more precise.",
+            "",
+            "STEP 1: Visual survey. Go through the image and note anything relevant in each category, even if a category turns up nothing:",
+            "- Text and language: signs, storefronts, license plates, menus, posters. Note the alphabet, language, and any words you can read.",
+            "- Infrastructure: road markings, traffic signal style, utility poles, manhole covers, socket and outlet styles, which side of the road vehicles drive on.",
+            "- Architecture: building materials, roof style, window shapes, construction era, and what region or country the style suggests.",
+            "- Landmarks: anything that could be a named, identifiable structure, monument, or natural feature.",
+            "- Vegetation and terrain: plant species, tree types, and what climate zone or hemisphere they suggest.",
+            "- Light and shadow: sun position and shadow direction relative to the timestamp below, useful for confirming hemisphere and rough latitude.",
+            "- People and culture: clothing, vehicle types, license plate colors or shapes, visible brand names, currency.",
+            "",
+            "STEP 2: Weigh the context.",
+            f"Photo timestamp: {date_str if date_str else 'Unknown / Not provided'}",
+            f"Camera device: {camera_model if camera_model else 'Unknown device'}",
+            f'User\'s own memory or hint: "{user_clues.strip() if user_clues else "None provided"}"',
         ]
-
-        if date_str:
-            prompt_parts.append(f"\nPhoto Timestamp: {date_str}")
-
-        if camera_model:
-            prompt_parts.append(f"Camera Device: {camera_model}")
-
-        if user_clues and user_clues.strip():
-            prompt_parts.append(f"\nUSER CLUES / MEMORY:\n\"{user_clues.strip()}\"")
 
         if same_day_anchors:
             anchor_lines = []
-            for a in same_day_anchors[:8]:
+            for a in same_day_anchors[:10]:
                 time_str = a.get("time", "")
                 lat = a.get("lat")
                 lon = a.get("lon")
                 name = a.get("name", "")
-                line = f"- Time {time_str}: ({lat:.5f}, {lon:.5f})"
-                if name:
-                    line += f" near {name}"
-                anchor_lines.append(line)
+                place_desc = f"{name} " if name else ""
+                anchor_lines.append(f"- {time_str}: {place_desc}({lat:.5f}, {lon:.5f})")
 
-            prompt_parts.append(
-                f"\nCONTEXTUAL SAME-DAY GPS ANCHORS:\n"
-                f"The user took other photos on the exact same date at these verified coordinates:\n"
-                + "\n".join(anchor_lines) + "\n"
-                f"Use these same-day anchor locations as strong regional context (e.g. same trip, city, or route), "
-                f"unless the visual scenery clearly indicates a different place."
-            )
+            prompt_parts.extend([
+                "",
+                "Same-day photos from this trip, with their verified locations:",
+                "\n".join(anchor_lines),
+                "",
+                "Treat these as a strong prior. Most single-day photo sets stay within the same city or a short travel route. Unless the visual evidence clearly points elsewhere, assume this photo falls within a few kilometers of the anchor closest in time to it, somewhere along the path between the anchors that bracket it.",
+            ])
+        else:
+            prompt_parts.extend([
+                "",
+                "Same-day photos from this trip: None available. Rely on visual evidence and any user hints above.",
+            ])
 
-        prompt_parts.append(
-            "\nREQUIRED OUTPUT FORMAT:\n"
-            "You MUST return ONLY a valid JSON object (no markdown, no surrounding text) matching this exact schema:\n"
-            "{\n"
-            '  "location_name": "Specific Landmark, City, State/Province, Country",\n'
-            '  "latitude": 43.7731,\n'
-            '  "longitude": 11.2560,\n'
-            '  "confidence": "high" | "medium" | "low",\n'
-            '  "reasoning": "Detailed visual explanation of landmarks, architecture, signs, or same-day context identified."\n'
-            "}\n"
-            "Provide the most accurate GPS coordinates possible (latitude between -90 and 90, longitude between -180 and 180)."
-        )
+        prompt_parts.extend([
+            "",
+            "STEP 3: Give your three best candidate locations, ranked, each with your confidence and the specific evidence that supports it.",
+            "",
+            "REQUIRED OUTPUT FORMAT:",
+            "You MUST return ONLY a valid JSON object matching this exact schema (no markdown, no surrounding text outside JSON):",
+            "{",
+            '  "location_name": "Primary Specific Landmark or City, Region, Country",',
+            '  "latitude": 43.7731,',
+            '  "longitude": 11.2560,',
+            '  "confidence": "high" | "medium" | "low",',
+            '  "reasoning": "Detailed forensic visual survey and contextual deduction summary.",',
+            '  "candidates": [',
+            '    {',
+            '      "rank": 1,',
+            '      "location_name": "Specific Landmark or City, Region, Country",',
+            '      "latitude": 43.7731,',
+            '      "longitude": 11.2560,',
+            '      "confidence": "high" | "medium" | "low",',
+            '      "evidence": "Specific visual and contextual evidence supporting Candidate 1"',
+            '    },',
+            '    {',
+            '      "rank": 2,',
+            '      "location_name": "Alternative Landmark / City / Region",',
+            '      "latitude": 43.7700,',
+            '      "longitude": 11.2500,',
+            '      "confidence": "medium" | "low",',
+            '      "evidence": "Specific evidence supporting Candidate 2"',
+            '    },',
+            '    {',
+            '      "rank": 3,',
+            '      "location_name": "Broad City / Region",',
+            '      "latitude": 43.7600,',
+            '      "longitude": 11.2400,',
+            '      "confidence": "low",',
+            '      "evidence": "Specific evidence supporting Candidate 3"',
+            '    }',
+            '  ]',
+            "}",
+            "Provide accurate GPS coordinates (latitude between -90 and 90, longitude between -180 and 180)."
+        ])
 
         return "\n".join(prompt_parts)
 
     @classmethod
     def parse_json_response(cls, response_text: str, provider: str, model: str) -> AIPredictionResult:
-        """Extracts and validates structured JSON prediction from LLM response text."""
+        """Extracts and validates structured JSON prediction and ranked candidates from LLM response text."""
         raw = response_text.strip()
         if not raw:
             raise ValueError(
@@ -150,7 +187,38 @@ class AIService:
                     confidence = "medium"
                 reasoning = str(data.get("reasoning", "")).strip()
 
+                # Parse candidates list
+                raw_candidates = data.get("candidates", [])
+                candidates = []
+                if isinstance(raw_candidates, list):
+                    for idx, c in enumerate(raw_candidates, start=1):
+                        if isinstance(c, dict):
+                            c_lat = float(c.get("latitude", 0.0))
+                            c_lon = float(c.get("longitude", 0.0))
+                            c_name = str(c.get("location_name", loc_name)).strip()
+                            c_conf = str(c.get("confidence", confidence)).lower().strip()
+                            c_evid = str(c.get("evidence", reasoning)).strip()
+                            if -90.0 <= c_lat <= 90.0 and -180.0 <= c_lon <= 180.0 and (c_lat != 0.0 or c_lon != 0.0):
+                                candidates.append({
+                                    "rank": c.get("rank", idx),
+                                    "location_name": c_name,
+                                    "latitude": c_lat,
+                                    "longitude": c_lon,
+                                    "confidence": c_conf if c_conf in ("high", "medium", "low") else "medium",
+                                    "evidence": c_evid,
+                                })
+
+                # If primary coordinates valid, return result
                 if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and (lat != 0.0 or lon != 0.0):
+                    if not candidates:
+                        candidates = [{
+                            "rank": 1,
+                            "location_name": loc_name,
+                            "latitude": lat,
+                            "longitude": lon,
+                            "confidence": confidence,
+                            "evidence": reasoning,
+                        }]
                     return AIPredictionResult(
                         location_name=loc_name,
                         latitude=lat,
@@ -159,6 +227,21 @@ class AIService:
                         reasoning=reasoning,
                         provider_used=provider,
                         model_used=model,
+                        candidates=candidates,
+                        raw_response=response_text,
+                    )
+                # If primary lat/lon was 0, but candidates[0] exists
+                elif candidates:
+                    first = candidates[0]
+                    return AIPredictionResult(
+                        location_name=first["location_name"],
+                        latitude=first["latitude"],
+                        longitude=first["longitude"],
+                        confidence=first["confidence"],
+                        reasoning=reasoning or first["evidence"],
+                        provider_used=provider,
+                        model_used=model,
+                        candidates=candidates,
                         raw_response=response_text,
                     )
             except Exception:
@@ -184,6 +267,14 @@ class AIService:
                     reasoning=reasoning,
                     provider_used=provider,
                     model_used=model,
+                    candidates=[{
+                        "rank": 1,
+                        "location_name": loc_name,
+                        "latitude": lat,
+                        "longitude": lon,
+                        "confidence": "medium",
+                        "evidence": reasoning,
+                    }],
                     raw_response=response_text,
                 )
 
@@ -201,6 +292,14 @@ class AIService:
                     reasoning=cleaned[:400],
                     provider_used=provider,
                     model_used=model,
+                    candidates=[{
+                        "rank": 1,
+                        "location_name": "Estimated Location",
+                        "latitude": lat,
+                        "longitude": lon,
+                        "confidence": "low",
+                        "evidence": cleaned[:400],
+                    }],
                     raw_response=response_text,
                 )
 

@@ -11,7 +11,7 @@ from PySide6.QtGui import QPixmap, QImage, QPainter, QBrush, QColor, QPen, QFont
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFrame, QWidget, QProgressBar, QTextEdit,
-    QScrollArea, QMessageBox, QSizePolicy
+    QScrollArea, QMessageBox, QSizePolicy, QComboBox
 )
 
 from resources.theme import Colors, STYLE_MODERN_CYBER
@@ -65,7 +65,7 @@ class _PredictWorker(QObject):
             # 1. Encode image to compact base64 jpeg
             image_b64 = AIService.encode_image_base64(self._image_path)
 
-            # 2. Build contextual prompt
+            # 2. Build contextual forensic prompt
             prompt = AIService.build_prompt(
                 user_clues=self._user_clues,
                 same_day_anchors=self._same_day_anchors,
@@ -118,9 +118,11 @@ class AIGuesserDialog(QDialog):
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._on_timer_tick)
+        self._selected_lat: float = 0.0
+        self._selected_lon: float = 0.0
 
-        self.setWindowTitle("AI Location Guesser & Vision Geocoding")
-        self.setFixedSize(680, 620)
+        self.setWindowTitle("AI Forensic Geolocation & Vision Geocoding")
+        self.setFixedSize(680, 640)
         self.setStyleSheet(STYLE_MODERN_CYBER)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
@@ -140,7 +142,7 @@ class AIGuesserDialog(QDialog):
 
         hdr_v = QVBoxLayout()
         hdr_v.setSpacing(2)
-        lbl_title = QLabel("AI Location Guesser", self)
+        lbl_title = QLabel("AI Forensic Location Guesser", self)
         lbl_title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {Colors.CYAN_LIGHT};")
         self._lbl_active_model = QLabel("Configuring AI Model...", self)
         self._lbl_active_model.setStyleSheet(f"font-size: 11px; color: {Colors.TEXT_MUTED};")
@@ -201,7 +203,7 @@ class AIGuesserDialog(QDialog):
             self._lbl_anchor_text.setStyleSheet(f"color: {Colors.EMERALD_LIGHT}; font-size: 10px;")
         else:
             self._lbl_anchor_text = QLabel(
-                "ℹ️ <b>No same-day GPS anchors found:</b> AI will rely strictly on visual features & your hints.",
+                "ℹ️ <b>No same-day GPS anchors found:</b> AI will rely strictly on visual forensic survey & your hints.",
                 self._banner_anchor
             )
             self._lbl_anchor_text.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
@@ -223,7 +225,7 @@ class AIGuesserDialog(QDialog):
         layout.addLayout(mid_row)
 
         # Predict CTA Button
-        self._btn_predict = QPushButton("🔮  Ask AI to Guess Location", self)
+        self._btn_predict = QPushButton("🔮  Analyze Image & Predict Location", self)
         self._btn_predict.setFixedHeight(34)
         self._btn_predict.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_predict.setStyleSheet(f"""
@@ -274,6 +276,18 @@ class AIGuesserDialog(QDialog):
         res_lay = QVBoxLayout(self._res_card)
         res_lay.setContentsMargins(14, 12, 14, 12)
         res_lay.setSpacing(8)
+
+        # Ranked Candidates Selector Row
+        self._row_candidates = QHBoxLayout()
+        lbl_cand = QLabel("Ranked Guesses:", self._res_card)
+        lbl_cand.setFixedWidth(100)
+        lbl_cand.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px; font-weight: bold;")
+        self._combo_candidates = QComboBox(self._res_card)
+        self._combo_candidates.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {Colors.CYAN_LIGHT};")
+        self._combo_candidates.currentIndexChanged.connect(self._on_candidate_changed)
+        self._row_candidates.addWidget(lbl_cand)
+        self._row_candidates.addWidget(self._combo_candidates, stretch=1)
+        res_lay.addLayout(self._row_candidates)
 
         # Top Result Row: Location Name + Confidence Pill
         res_top = QHBoxLayout()
@@ -354,7 +368,7 @@ class AIGuesserDialog(QDialog):
         self._elapsed_seconds += 1
         prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
         if prov == "gemini":
-            self._lbl_status.setText(f"✨ Google Gemini querying vision API... ({self._elapsed_seconds}s elapsed)")
+            self._lbl_status.setText(f"✨ Google Gemini running forensic visual survey... ({self._elapsed_seconds}s elapsed)")
         elif prov == "openai":
             self._lbl_status.setText(f"⚡ OpenAI analyzing visual features... ({self._elapsed_seconds}s elapsed)")
         else:
@@ -371,7 +385,7 @@ class AIGuesserDialog(QDialog):
 
         prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
         if prov == "gemini":
-            self._lbl_status.setText("✨ Google Gemini querying vision API... (0s elapsed)")
+            self._lbl_status.setText("✨ Google Gemini running forensic visual survey... (0s elapsed)")
         elif prov == "openai":
             self._lbl_status.setText("⚡ OpenAI analyzing visual features... (0s elapsed)")
         else:
@@ -410,6 +424,30 @@ class AIGuesserDialog(QDialog):
         self._worker.error.connect(self._on_prediction_error)
         self._thread.start()
 
+    def _update_confidence_badge(self, confidence: str):
+        c = (confidence or "medium").lower()
+        if c == "high":
+            self._lbl_res_conf.setText("🟢 HIGH CONFIDENCE")
+            self._lbl_res_conf.setStyleSheet("background: #064e3b; color: #34d399; border: 1px solid #059669; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
+        elif c == "medium":
+            self._lbl_res_conf.setText("🟡 MEDIUM CONFIDENCE")
+            self._lbl_res_conf.setStyleSheet("background: #451a03; color: #fbbf24; border: 1px solid #d97706; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
+        else:
+            self._lbl_res_conf.setText("🔴 LOW CONFIDENCE")
+            self._lbl_res_conf.setStyleSheet("background: #4c0519; color: #fda4af; border: 1px solid #e11d48; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
+
+    def _on_candidate_changed(self, index: int):
+        if not self._last_result or not self._last_result.candidates or index < 0 or index >= len(self._last_result.candidates):
+            return
+        c = self._last_result.candidates[index]
+        self._selected_lat = float(c["latitude"])
+        self._selected_lon = float(c["longitude"])
+        self._lbl_res_name.setText(f"📍 {c['location_name']}")
+        self._lbl_res_coords.setText(f"Coordinates: {self._selected_lat:.6f}, {self._selected_lon:.6f}")
+        self._update_confidence_badge(c.get("confidence", "medium"))
+        evidence = c.get("evidence") or self._last_result.reasoning
+        self._lbl_res_reason.setText(f"<b>Visual Evidence & Forensic Reasoning:</b><br>{evidence}")
+
     def _on_prediction_success(self, res: AIPredictionResult):
         self._last_result = res
         self._cleanup_thread()
@@ -418,21 +456,33 @@ class AIGuesserDialog(QDialog):
         self._progress.setVisible(False)
         self._lbl_status.setVisible(False)
 
-        # Populate Results Card
-        self._lbl_res_name.setText(f"📍 {res.location_name}")
-        self._lbl_res_coords.setText(f"Coordinates: {res.latitude:.6f}, {res.longitude:.6f}")
+        # Setup Candidate Selector
+        self._combo_candidates.blockSignals(True)
+        self._combo_candidates.clear()
+        candidates = res.candidates or [{
+            "rank": 1,
+            "location_name": res.location_name,
+            "latitude": res.latitude,
+            "longitude": res.longitude,
+            "confidence": res.confidence,
+            "evidence": res.reasoning,
+        }]
 
-        if res.confidence == "high":
-            self._lbl_res_conf.setText("🟢 HIGH CONFIDENCE")
-            self._lbl_res_conf.setStyleSheet("background: #064e3b; color: #34d399; border: 1px solid #059669; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
-        elif res.confidence == "medium":
-            self._lbl_res_conf.setText("🟡 MEDIUM CONFIDENCE")
-            self._lbl_res_conf.setStyleSheet("background: #451a03; color: #fbbf24; border: 1px solid #d97706; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
-        else:
-            self._lbl_res_conf.setText("🔴 LOW CONFIDENCE")
-            self._lbl_res_conf.setStyleSheet("background: #4c0519; color: #fda4af; border: 1px solid #e11d48; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
+        for idx, c in enumerate(candidates, start=1):
+            rank_num = c.get("rank", idx)
+            name = c.get("location_name", "Candidate")
+            conf = c.get("confidence", "med").upper()
+            self._combo_candidates.addItem(f"🎯 Rank #{rank_num}: {name} [{conf}]", c)
 
-        self._lbl_res_reason.setText(f"<b>Visual & Context Reasoning:</b><br>{res.reasoning}")
+        self._combo_candidates.blockSignals(False)
+        
+        # Show candidate selector only if multiple candidates exist
+        self._combo_candidates.setVisible(len(candidates) > 1)
+        self._row_candidates.itemAt(0).widget().setVisible(len(candidates) > 1)
+
+        # Set first candidate as active
+        self._combo_candidates.setCurrentIndex(0)
+        self._on_candidate_changed(0)
 
         self._res_card.setVisible(True)
         self._btn_preview.setVisible(True)
@@ -457,10 +507,10 @@ class AIGuesserDialog(QDialog):
             self._worker = None
 
     def _on_preview_map(self):
-        if self._last_result:
-            self.preview_on_map.emit(self._last_result.latitude, self._last_result.longitude)
+        if self._selected_lat != 0.0 or self._selected_lon != 0.0:
+            self.preview_on_map.emit(self._selected_lat, self._selected_lon)
 
     def _on_apply_gps(self):
-        if self._last_result:
-            self.apply_gps.emit(self._item, self._last_result.latitude, self._last_result.longitude)
+        if self._selected_lat != 0.0 or self._selected_lon != 0.0:
+            self.apply_gps.emit(self._item, self._selected_lat, self._selected_lon)
             self.accept()
