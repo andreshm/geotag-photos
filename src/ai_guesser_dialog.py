@@ -37,8 +37,9 @@ log = logging.getLogger(__name__)
 class _PredictWorker(QObject):
     """Background worker for Vision AI API query."""
 
-    finished = Signal(object)  # AIPredictionResult
-    error    = Signal(str)
+    finished     = Signal(object)  # AIPredictionResult
+    error        = Signal(str)
+    token_update = Signal(int)     # Streamed chunk/token count
 
     def __init__(
         self,
@@ -88,7 +89,21 @@ class _PredictWorker(QObject):
                 server_url = self._settings.get(SETTINGS_OLLAMA_URL, "http://localhost:11434")
                 model = self._settings.get(SETTINGS_OLLAMA_MODEL, "llama3.2-vision")
                 timeout = int(self._settings.get(SETTINGS_OLLAMA_TIMEOUT, 360))
-                res = AIService.predict_with_ollama(image_b64, prompt, server_url=server_url, model=model, timeout=timeout)
+                token_count = 0
+                def on_token(chunk_text):
+                    nonlocal token_count
+                    token_count += 1
+                    if token_count % 2 == 0:
+                        self.token_update.emit(token_count)
+
+                res = AIService.predict_with_ollama(
+                    image_b64,
+                    prompt,
+                    server_url=server_url,
+                    model=model,
+                    timeout=timeout,
+                    on_token_callback=on_token,
+                )
 
             self.finished.emit(res)
         except Exception as exc:
@@ -115,6 +130,7 @@ class AIGuesserDialog(QDialog):
         self._last_result: Optional[AIPredictionResult] = None
         self._thread: Optional[QThread] = None
         self._elapsed_seconds = 0
+        self._token_count = 0
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._on_timer_tick)
@@ -373,7 +389,17 @@ class AIGuesserDialog(QDialog):
             self._lbl_status.setText(f"⚡ OpenAI analyzing visual features... ({self._elapsed_seconds}s elapsed)")
         else:
             model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
-            self._lbl_status.setText(f"🦙 Ollama running '{model}' locally... ({self._elapsed_seconds}s elapsed)")
+            if self._token_count > 0:
+                self._lbl_status.setText(f"🦙 Ollama streaming '{model}' ({self._token_count} tokens, {self._elapsed_seconds}s elapsed)...")
+            else:
+                self._lbl_status.setText(f"🦙 Ollama processing image with '{model}'... ({self._elapsed_seconds}s elapsed)")
+
+    def _on_token_update(self, count: int):
+        self._token_count = count
+        prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
+        if prov == "ollama":
+            model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
+            self._lbl_status.setText(f"🦙 Ollama streaming '{model}' ({self._token_count} tokens, {self._elapsed_seconds}s elapsed)...")
 
     def _on_start_prediction(self):
         self._btn_predict.setEnabled(False)
@@ -381,6 +407,7 @@ class AIGuesserDialog(QDialog):
         self._lbl_status.setVisible(True)
         self._lbl_status.setStyleSheet(f"font-size: 11px; color: {Colors.CYAN_LIGHT}; font-style: italic;")
         self._elapsed_seconds = 0
+        self._token_count = 0
         self._elapsed_timer.start()
 
         prov = self._settings.value(SETTINGS_AI_PROVIDER, "ollama", type=str)
@@ -390,7 +417,7 @@ class AIGuesserDialog(QDialog):
             self._lbl_status.setText("⚡ OpenAI analyzing visual features... (0s elapsed)")
         else:
             model = self._settings.value(SETTINGS_OLLAMA_MODEL, "llama3.2-vision", type=str)
-            self._lbl_status.setText(f"🦙 Ollama running '{model}' locally... (0s elapsed)")
+            self._lbl_status.setText(f"🦙 Ollama processing image with '{model}'... (0s elapsed)")
 
         self._res_card.setVisible(False)
         self._btn_preview.setVisible(False)
@@ -420,6 +447,7 @@ class AIGuesserDialog(QDialog):
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.token_update.connect(self._on_token_update)
         self._worker.finished.connect(self._on_prediction_success)
         self._worker.error.connect(self._on_prediction_error)
         self._thread.start()

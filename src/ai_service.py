@@ -328,8 +328,9 @@ class AIService:
         server_url: str = "http://localhost:11434",
         model: str = "llama3.2-vision",
         timeout: int = 360,
+        on_token_callback: Optional[Any] = None,
     ) -> AIPredictionResult:
-        """Sends image and prompt to local Ollama vision model using the modern /api/chat endpoint."""
+        """Sends image and prompt to local Ollama vision model using streaming /api/chat to prevent HTTP inactivity timeouts."""
         url_chat = server_url.rstrip("/") + "/api/chat"
         payload_chat = {
             "model": model,
@@ -340,7 +341,7 @@ class AIService:
                     "images": [image_b64],
                 }
             ],
-            "stream": False,
+            "stream": True,  # Streaming continuously refreshes socket activity and prevents HTTP timeout
             "options": {
                 "temperature": 0.2,
             },
@@ -355,18 +356,34 @@ class AIService:
         )
 
         try:
+            full_content = []
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                res_json = json.loads(resp.read().decode("utf-8"))
-                response_text = res_json.get("message", {}).get("content", "").strip()
+                for line in resp:
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line.decode("utf-8"))
+                        msg = chunk.get("message", {})
+                        content = msg.get("content", "")
+                        if content:
+                            full_content.append(content)
+                            if on_token_callback:
+                                on_token_callback(content)
+                        if chunk.get("done", False):
+                            break
+                    except Exception:
+                        continue
 
-            # If /api/chat was empty, fallback to /api/generate
+            response_text = "".join(full_content).strip()
+
+            # If /api/chat was empty, fallback to streaming /api/generate
             if not response_text:
                 url_gen = server_url.rstrip("/") + "/api/generate"
                 payload_gen = {
                     "model": model,
                     "prompt": prompt,
                     "images": [image_b64],
-                    "stream": False,
+                    "stream": True,
                 }
                 req_gen = urllib.request.Request(
                     url_gen,
@@ -375,8 +392,22 @@ class AIService:
                     method="POST",
                 )
                 with urllib.request.urlopen(req_gen, timeout=timeout) as resp_gen:
-                    res_gen = json.loads(resp_gen.read().decode("utf-8"))
-                    response_text = res_gen.get("response", "").strip()
+                    for line in resp_gen:
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line.decode("utf-8"))
+                            resp_chunk = chunk.get("response", "")
+                            if resp_chunk:
+                                full_content.append(resp_chunk)
+                                if on_token_callback:
+                                    on_token_callback(resp_chunk)
+                            if chunk.get("done", False):
+                                break
+                        except Exception:
+                            continue
+
+                response_text = "".join(full_content).strip()
 
             return cls.parse_json_response(response_text, "Ollama (Local)", model)
         except urllib.error.URLError as exc:
