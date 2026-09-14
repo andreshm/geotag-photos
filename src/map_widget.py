@@ -227,3 +227,17 @@ class MapWidget(QWidget):
 
         payload = json.dumps(markers)
         self._run_js(f"setPhotoMarkersData({payload});")
+
+    def set_track(self, points: list[dict], color: str = "#c084fc"):
+        """Renders a GPS track polyline on the Leaflet map."""
+        if not points:
+            self.clear_track()
+            return
+        payload = json.dumps(points)
+        color_json = json.dumps(color)
+        self._run_js(f"setTrackData({payload}, {color_json});")
+
+    def clear_track(self):
+        """Clears any rendered GPS track from the Leaflet map."""
+        self._run_js("clearTrack();")
+

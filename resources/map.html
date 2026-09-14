@@ -124,6 +124,7 @@
 let map, pyBridge;
 let pickerMarker = null;
 let photoMarkersLayer = null;
+let trackLayer = null;
 
 function initMap() {
   // 1. Cyber Dark Canvas (Esri World Dark Gray Base + Labels Reference) - 100% Free & No API Key
@@ -182,6 +183,7 @@ function initMap() {
 
   L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
 
+  trackLayer = L.layerGroup().addTo(map);
   photoMarkersLayer = L.layerGroup().addTo(map);
 
   // Nominatim Search Geocoder
@@ -353,10 +355,54 @@ function setPicker(lat, lng, zoom) {
   map.flyTo([lat, lng], z, { animate: true, duration: 0.8 });
 }
 
-function clearPicker() {
-  if (pickerMarker) {
-    map.removeLayer(pickerMarker);
-    pickerMarker = null;
+function setTrackData(points, color) {
+  if (!trackLayer) {
+    if (map) trackLayer = L.layerGroup().addTo(map);
+    else return;
+  }
+  trackLayer.clearLayers();
+  if (!points || !points.length) return;
+
+  const latlngs = points.map(p => [p.lat, p.lon]);
+  const polyline = L.polyline(latlngs, {
+    color: color || '#c084fc',
+    weight: 4,
+    opacity: 0.85,
+    lineJoin: 'round'
+  }).addTo(trackLayer);
+
+  // Add start and end pin markers if at least 2 points
+  if (points.length >= 2) {
+    const startPt = points[0];
+    const endPt = points[points.length - 1];
+
+    const startMarker = L.circleMarker([startPt.lat, startPt.lon], {
+      radius: 6,
+      color: '#10b981',
+      fillColor: '#34d399',
+      fillOpacity: 0.9,
+      weight: 2
+    }).bindTooltip("🚩 Track Start", { direction: 'top' });
+    trackLayer.addLayer(startMarker);
+
+    const endMarker = L.circleMarker([endPt.lat, endPt.lon], {
+      radius: 6,
+      color: '#f43f5e',
+      fillColor: '#fb7185',
+      fillOpacity: 0.9,
+      weight: 2
+    }).bindTooltip("🏁 Track End", { direction: 'top' });
+    trackLayer.addLayer(endMarker);
+  }
+
+  try {
+    map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
+  } catch (e) {}
+}
+
+function clearTrack() {
+  if (trackLayer) {
+    trackLayer.clearLayers();
   }
 }
 

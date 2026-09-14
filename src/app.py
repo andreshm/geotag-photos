@@ -33,6 +33,7 @@ from .folder_dialog import MultiFolderDialog
 from .save_progress_dialog import SaveProgressDialog
 from .ai_settings_dialog import AISettingsDialog
 from .ai_guesser_dialog import AIGuesserDialog
+from .track_match_dialog import TrackMatchDialog
 
 log = logging.getLogger(__name__)
 
@@ -206,6 +207,12 @@ class MainWindow(QMainWindow):
         self._btn_ai_cfg.setToolTip("Configure Vision AI Models (Ollama / Gemini / OpenAI) for Location Prediction")
         self._btn_ai_cfg.clicked.connect(self._open_ai_config)
         hl.addWidget(self._btn_ai_cfg)
+
+        # ── GPS Track / OwnTracks Matcher Button ──────────────────────────────
+        self._btn_track = QPushButton("🛰️  GPS Track", header_widget)
+        self._btn_track.setToolTip("Match photos with OwnTracks server or GPS track file (Ctrl+T)")
+        self._btn_track.clicked.connect(self._open_track_matcher)
+        hl.addWidget(self._btn_track)
 
         # ── Auto-tag CTA ─────────────────────────────────────────────────────
         self._btn_hdr_auto = QPushButton("⚡  Auto-tag", header_widget)
@@ -497,6 +504,7 @@ class MainWindow(QMainWindow):
         _act("Ctrl+Return", self._assign_gps)
         _act("Ctrl+S",      self._save_changes)
         _act("Ctrl+B",      self._open_backup_manager)
+        _act("Ctrl+T",      self._open_track_matcher)
         _act("Delete",      self._clear_pending_gps_selected)
         _act("Backspace",   self._clear_pending_gps_selected)
 
@@ -1203,10 +1211,32 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool):
         self._is_busy = busy
         for w in [self._btn_open, self._btn_assign, self._btn_auto, self._btn_save,
-                  self._btn_hdr_auto, self._btn_hdr_save, self._btn_clear_sel, self._btn_strip_sel]:
+                  self._btn_hdr_auto, self._btn_hdr_save, self._btn_clear_sel, self._btn_strip_sel,
+                  self._btn_track, self._btn_ai_cfg, self._btn_backups]:
             w.setEnabled(not busy)
         if not busy:
             self._update_action_states()
+
+    # =========================================================================
+    # OwnTracks & GPS Track Matching
+    # =========================================================================
+
+    def _open_track_matcher(self):
+        """Opens the OwnTracks & GPS Track Photo Matcher dialog."""
+        if not self._all_items:
+            QMessageBox.information(
+                self, "No Media Loaded",
+                "Please open a folder with photos/videos first to match with a GPS track."
+            )
+            return
+
+        dlg = TrackMatchDialog(self, photos=self._all_items, map_widget=self._map)
+        if dlg.exec() and dlg.applied_count > 0:
+            self._grid.refresh_all()
+            self._refresh_stat_cards()
+            self._update_action_states()
+            self._map.show_photo_markers(self._all_items)
+            self._status(f"✓ OwnTracks/GPS Track matched & staged GPS for {dlg.applied_count} photo(s)")
 
     # =========================================================================
     # AI Vision Geolocation Predictor Helpers
