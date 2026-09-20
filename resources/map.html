@@ -127,6 +127,13 @@ let photoMarkersLayer = null;
 let trackLayer = null;
 
 function initMap() {
+  if (typeof L === 'undefined') {
+    console.warn('[map] Leaflet library not loaded yet, retrying in 150ms...');
+    setTimeout(initMap, 150);
+    return;
+  }
+  if (map) return;
+
   // 1. Cyber Dark Canvas (Esri World Dark Gray Base + Labels Reference) - 100% Free & No API Key
   const esriDarkBase = L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
     attribution: '© <a href="https://www.esri.com/">Esri</a>, HERE, Garmin, © OpenStreetMap',
@@ -406,7 +413,11 @@ function clearTrack() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', initMap);
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+  initMap();
+} else {
+  document.addEventListener('DOMContentLoaded', initMap);
+}
 </script>
 </body>
 </html>

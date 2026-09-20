@@ -8,20 +8,61 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # ── Remote Desktop (RDP) & GPU Stability Setup ──────────────────────────────
-is_rdp = (
-    os.environ.get("SESSIONNAME", "").lower().startswith("rdp-")
-    or bool(os.environ.get("CLIENTNAME"))
-    or "--disable-gpu" in sys.argv
-    or "--software-render" in sys.argv
-)
+def is_remote_or_software_render() -> bool:
+    """Detects if the session is running under Remote Desktop (RDP), a virtual display, or software mode."""
+    # 1. Native Windows Win32 API Check (SM_REMOTESESSION = 0x1000, SM_REMOTECONTROL = 0x2001)
+    try:
+        import ctypes
+        if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "user32"):
+            if ctypes.windll.user32.GetSystemMetrics(0x1000) != 0:
+                return True
+            if ctypes.windll.user32.GetSystemMetrics(0x2001) != 0:
+                return True
+    except Exception:
+        pass
+
+    # 2. Environment Variables Check
+    sess = os.environ.get("SESSIONNAME", "").lower()
+    if sess and sess != "console" and any(k in sess for k in ("rdp", "tcp", "ica", "citrix", "term")):
+        return True
+    if bool(os.environ.get("CLIENTNAME")):
+        return True
+    if any(k in os.environ for k in ("SSH_CONNECTION", "SSH_CLIENT", "XRDP_SESSION", "REMOTE_DESKTOP", "VNC_SERVER")):
+        return True
+
+    # 3. Explicit Command Line Flags
+    if any(arg in sys.argv for arg in ("--disable-gpu", "--software-render", "--rdp", "--no-gpu", "--software")):
+        return True
+
+    # 4. User Preference in QSettings
+    try:
+        from PySide6.QtCore import QSettings
+        settings = QSettings("GeoTag", "GeoTagStudioPRO")
+        if settings.value("ui/force_software_render", False, type=bool):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+is_rdp = is_remote_or_software_render()
 
 if is_rdp:
     # RDP virtual display adapters lack hardware D3D/OpenGL swapchains.
     # Force software rasterization so QtWebEngine Chromium renders cleanly without a blank screen.
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --no-sandbox"
+        "--disable-gpu "
+        "--disable-gpu-compositing "
+        "--disable-gpu-rasterization "
+        "--disable-accelerated-2d-canvas "
+        "--disable-accelerated-video-decode "
+        "--in-process-gpu "
+        "--no-sandbox"
     )
     os.environ["QT_QUICK_BACKEND"] = "software"
+    os.environ["QT_OPENGL"] = "software"
+    os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
 else:
     # Standard desktop: allow hardware acceleration with DirectComposition crash guards
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
@@ -68,6 +109,11 @@ logging.info("Starting GeoTag Studio PRO. Log file initialized at: %s", LOG_FILE
 
 # ── Qt WebEngine Initialization ──────────────────────────────────────────────
 from PySide6.QtCore import Qt, QCoreApplication
+if is_rdp:
+    logging.info("Applying AA_UseSoftwareOpenGL for remote/software render mode.")
+    if hasattr(Qt.ApplicationAttribute, "AA_UseSoftwareOpenGL"):
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL)
+
 QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
 from PySide6.QtWidgets import QApplication

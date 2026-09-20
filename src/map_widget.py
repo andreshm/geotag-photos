@@ -20,9 +20,32 @@ from PySide6.QtWidgets import (
 from resources.theme import Colors, STYLE_MODERN_CYBER
 from .photo_item import PhotoItem
 
+import sys
+
 log = logging.getLogger(__name__)
 
-MAP_HTML = Path(__file__).parent.parent / "resources" / "map.html"
+
+def _resolve_map_html() -> Path:
+    """Locates map.html reliably across development, PyInstaller bundles, and working dirs."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        p = Path(sys._MEIPASS) / "resources" / "map.html"
+        if p.is_file():
+            return p
+    if getattr(sys, "frozen", False"):
+        exe_dir = Path(sys.executable).parent
+        for cand in (
+            exe_dir / "_internal" / "resources" / "map.html",
+            exe_dir / "resources" / "map.html",
+        ):
+            if cand.is_file():
+                return cand
+    src_p = Path(__file__).resolve().parent.parent / "resources" / "map.html"
+    if src_p.is_file():
+        return src_p
+    cwd_p = Path.cwd() / "resources" / "map.html"
+    if cwd_p.is_file():
+        return cwd_p
+    return src_p
 
 
 class MapBridge(QObject):
@@ -41,7 +64,10 @@ class MapBridge(QObject):
 
 class SilentPage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, line, source):
-        log.debug("[Map JS] %s (line %d)", message, line)
+        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            log.warning("[Map JS Error] %s (line %d, %s)", message, line, source)
+        else:
+            log.debug("[Map JS] %s (line %d)", message, line)
 
 
 class MapWidget(QWidget):
@@ -70,6 +96,18 @@ class MapWidget(QWidget):
         self._page.settings().setAttribute(
             QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True
         )
+        self._page.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
+        )
+        self._page.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.JavascriptEnabled, True
+        )
+        self._page.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False
+        )
+        self._page.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.ErrorPageEnabled, True
+        )
 
         self._view = QWebEngineView(self)
         self._view.setPage(self._page)
@@ -82,11 +120,15 @@ class MapWidget(QWidget):
         self._channel.registerObject("pyBridge", self._bridge)
         self._page.setWebChannel(self._channel)
 
-        if MAP_HTML.exists():
-            self._page.loadFinished.connect(self._on_load_finished)
-            self._view.setUrl(QUrl.fromLocalFile(str(MAP_HTML)))
+        self._page.renderProcessTerminated.connect(self._on_render_process_terminated)
+        self._page.loadFinished.connect(self._on_load_finished)
+
+        map_html_path = _resolve_map_html()
+        if map_html_path.exists():
+            log.info("Loading map HTML from: %s", map_html_path)
+            self._view.setUrl(QUrl.fromLocalFile(str(map_html_path)))
         else:
-            lbl = QLabel(f"⚠️ map.html not found at:\n{MAP_HTML}", self)
+            lbl = QLabel(f"⚠️ map.html not found at:\n{map_html_path}", self)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(lbl)
             return
@@ -125,11 +167,20 @@ class MapWidget(QWidget):
 
     # ── Internal Event Handlers ───────────────────────────────────────────────
 
+    def _on_render_process_terminated(self, status, exit_code):
+        log.warning("Map WebEngine render process terminated: status=%s, exit_code=%d", status, exit_code)
+        self._ready = False
+        map_path = _resolve_map_html()
+        if map_path.exists():
+            log.info("Reloading Map HTML after render process termination...")
+            self._view.setUrl(QUrl.fromLocalFile(str(map_path)))
+
     def _on_load_finished(self, ok: bool):
         if not ok:
-            log.error("Map HTML failed to load")
+            log.error("Map HTML failed to load (ok=False)")
             return
         self._ready = True
+        log.debug("Map loaded OK — flushing %d queued JS calls", len(self._pending_js))
         for js in self._pending_js:
             self._page.runJavaScript(js)
         self._pending_js.clear()

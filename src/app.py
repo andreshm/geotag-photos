@@ -192,6 +192,11 @@ class MainWindow(QMainWindow):
         act_open_cache.triggered.connect(self._open_cache_folder)
         act_clear_cache = cache_menu.addAction("🗑️  Clear All Cached Thumbnails")
         act_clear_cache.triggered.connect(self._clear_cache)
+        cache_menu.addSeparator()
+        self._act_sw_render = cache_menu.addAction("🖥️  Force Software Rendering (RDP Mode)")
+        self._act_sw_render.setCheckable(True)
+        self._act_sw_render.setChecked(self._settings.value("ui/force_software_render", False, type=bool))
+        self._act_sw_render.toggled.connect(self._toggle_software_render)
         self._btn_cache.setMenu(cache_menu)
         hl.addWidget(self._btn_cache)
 
@@ -1155,6 +1160,17 @@ class MainWindow(QMainWindow):
             n = thumbnail_cache.clear_all()
             self._status(f"Cleared {n} cached thumbnails.")
             QMessageBox.information(self, "Cache Cleared", f"Cleared {n} thumbnail files from disk cache.")
+
+    def _toggle_software_render(self, checked: bool):
+        self._settings.setValue("ui/force_software_render", checked)
+        self._settings.sync()
+        status_str = "ENABLED" if checked else "DISABLED"
+        QMessageBox.information(
+            self,
+            "Rendering Mode Changed",
+            f"Software Rendering (RDP Mode) has been {status_str}.\n\n"
+            f"Please restart {APP_TITLE} for the change to take full effect.",
+        )
 
     # =========================================================================
     # Helpers & Stat Cards Refresh
