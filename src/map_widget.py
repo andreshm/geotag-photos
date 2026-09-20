@@ -31,7 +31,7 @@ def _resolve_map_html() -> Path:
         p = Path(sys._MEIPASS) / "resources" / "map.html"
         if p.is_file():
             return p
-    if getattr(sys, "frozen", False"):
+    if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).parent
         for cand in (
             exe_dir / "_internal" / "resources" / "map.html",

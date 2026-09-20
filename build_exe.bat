@@ -12,20 +12,7 @@ python -m pip install --upgrade pyinstaller
 
 echo.
 echo Building portable distribution (Device-Guard safe via python module)...
-python -m PyInstaller ^
-  --name "GeoTagStudioPRO" ^
-  --noconfirm ^
-  --clean ^
-  --onedir ^
-  --windowed ^
-  --icon NONE ^
-  --add-data "resources;resources" ^
-  --hidden-import "PySide6.QtWebEngineWidgets" ^
-  --hidden-import "PySide6.QtWebEngineCore" ^
-  --hidden-import "PySide6.QtWebChannel" ^
-  --hidden-import "rawpy" ^
-  --hidden-import "exiftool" ^
-  main.py
+python -m PyInstaller --noconfirm --clean GeoTagStudioPRO.spec
 
 if errorlevel 1 (
     echo.

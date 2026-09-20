@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 *.spec
+!GeoTagStudioPRO.spec
 
 # Virtual environment
 .venv/
